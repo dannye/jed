@@ -128,7 +128,7 @@ struct Header {
     byte successiveApproximationHigh;
     byte successiveApproximationLow;
 
-    byte restartInterval = 0;
+    uint restartInterval = 0;
 
     ColorComponent colorComponents[3];
 

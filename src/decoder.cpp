@@ -288,7 +288,7 @@ Header* readJPG(const std::string& filename) {
     if (header == nullptr) {
         std::cout << "Error - Memory error\n";
         inFile.close();
-        return header;
+        return nullptr;
     }
 
     // first two bytes must be 0xFF, SOI
@@ -901,7 +901,7 @@ void YCbCrToRGB(const Header* const header, MCU* const mcus) {
 }
 
 // helper function to write a 4-byte integer in little-endian
-void putInt(std::ofstream& outFile, const int v) {
+void putInt(std::ofstream& outFile, const uint v) {
     outFile.put((v >>  0) & 0xFF);
     outFile.put((v >>  8) & 0xFF);
     outFile.put((v >> 16) & 0xFF);
@@ -909,7 +909,7 @@ void putInt(std::ofstream& outFile, const int v) {
 }
 
 // helper function to write a 2-byte short integer in little-endian
-void putShort(std::ofstream& outFile, const int v) {
+void putShort(std::ofstream& outFile, const uint v) {
     outFile.put((v >>  0) & 0xFF);
     outFile.put((v >>  8) & 0xFF);
 }
