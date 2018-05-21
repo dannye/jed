@@ -6,7 +6,7 @@
 #include "jpg.h"
 
 // SOF specifies frame type, dimensions, and number of color components
-void readStartOfFrame(std::ifstream& inFile, Header* header) {
+void readStartOfFrame(std::ifstream& inFile, Header* const header) {
     if (header->numComponents != 0) {
         std::cout << "Error - Multiple SOFs detected\n";
         header->valid = false;
@@ -85,7 +85,7 @@ void readStartOfFrame(std::ifstream& inFile, Header* header) {
 }
 
 // DQT contains one or more quantization tables
-void readQuantizationTable(std::ifstream& inFile, Header* header) {
+void readQuantizationTable(std::ifstream& inFile, Header* const header) {
     int length = (inFile.get() << 8) + inFile.get();
     length -= 2;
 
@@ -122,7 +122,7 @@ void readQuantizationTable(std::ifstream& inFile, Header* header) {
 }
 
 // DHT contains one or more Huffman tables
-void readHuffmanTable(std::ifstream& inFile, Header* header) {
+void readHuffmanTable(std::ifstream& inFile, Header* const header) {
     int length = (inFile.get() << 8) + inFile.get();
     length -= 2;
 
@@ -171,7 +171,7 @@ void readHuffmanTable(std::ifstream& inFile, Header* header) {
 }
 
 // SOS contains color component info for the next scan
-void readStartOfScan(std::ifstream& inFile, Header* header) {
+void readStartOfScan(std::ifstream& inFile, Header* const header) {
     if (header->numComponents == 0) {
         std::cout << "Error - SOS detected before SOF\n";
         header->valid = false;
@@ -246,7 +246,7 @@ void readStartOfScan(std::ifstream& inFile, Header* header) {
 }
 
 // restart interval is needed to stay synchronized during data scans
-void readRestartInterval(std::ifstream& inFile, Header* header) {
+void readRestartInterval(std::ifstream& inFile, Header* const header) {
     uint length = (inFile.get() << 8) + inFile.get();
 
     header->restartInterval = (inFile.get() << 8) + inFile.get();
@@ -257,7 +257,7 @@ void readRestartInterval(std::ifstream& inFile, Header* header) {
 }
 
 // APPNs simply get skipped based on length
-void readAPPN(std::ifstream& inFile, Header* header) {
+void readAPPN(std::ifstream& inFile, Header* const header) {
     uint length = (inFile.get() << 8) + inFile.get();
 
     for (uint i = 0; i < length - 2; ++i) {
@@ -266,7 +266,7 @@ void readAPPN(std::ifstream& inFile, Header* header) {
 }
 
 // comments simply get skipped based on length
-void readComment(std::ifstream& inFile, Header* header) {
+void readComment(std::ifstream& inFile, Header* const header) {
     uint length = (inFile.get() << 8) + inFile.get();
 
     for (uint i = 0; i < length - 2; ++i) {
@@ -274,11 +274,20 @@ void readComment(std::ifstream& inFile, Header* header) {
     }
 }
 
-Header* readJPG(std::ifstream& inFile) {
+Header* readJPG(const std::string& filename) {
+    // open file
+    std::ifstream inFile = std::ifstream(filename, std::ios::in | std::ios::binary);
+    if (!inFile.is_open()) {
+        std::cout << "Error - Error opening input file\n";
+        return nullptr;
+    }
+
     Header* header = new (std::nothrow) Header;
     byte last, current;
 
     if (header == nullptr) {
+        std::cout << "Error - Memory error\n";
+        inFile.close();
         return header;
     }
 
@@ -287,6 +296,7 @@ Header* readJPG(std::ifstream& inFile) {
     current = inFile.get();
     if (last != 0xFF || current != SOI) {
         header->valid = false;
+        inFile.close();
         return header;
     }
     last = inFile.get();
@@ -297,11 +307,13 @@ Header* readJPG(std::ifstream& inFile) {
         if (!inFile) {
             std::cout << "Error - File ended prematurely\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
         if (last != 0xFF) {
             std::cout << "Error - Expected a marker\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
 
@@ -348,21 +360,25 @@ Header* readJPG(std::ifstream& inFile) {
         else if (current == SOI) {
             std::cout << "Error - Embedded JPGs not supported\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
         else if (current == EOI) {
             std::cout << "Error - EOI detected before SOS\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
         else if (current == DAC) {
             std::cout << "Error - Arithmetic Coding mode not supported\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
         else if (current >= SOF0 && current <= SOF15) {
             std::cout << "Error - SOF marker not supported: 0x" << std::hex << (uint)current << std::dec << '\n';
             header->valid = false;
+            inFile.close();
             return header;
         }
         else if (current >= RST0 && current <= RST7) {
@@ -373,6 +389,7 @@ Header* readJPG(std::ifstream& inFile) {
         else {
             std::cout << "Error - Unknown marker: 0x" << std::hex << (uint)current << std::dec << '\n';
             header->valid = false;
+            inFile.close();
             return header;
         }
         last = inFile.get();
@@ -387,6 +404,7 @@ Header* readJPG(std::ifstream& inFile) {
             if (!inFile) {
                 std::cout << "Error - File ended prematurely\n";
                 header->valid = false;
+                inFile.close();
                 return header;
             }
 
@@ -417,6 +435,7 @@ Header* readJPG(std::ifstream& inFile) {
                 else {
                     std::cout << "Error - Invalid marker during compressed data scan: 0x" << std::hex << (uint)current << std::dec << '\n';
                     header->valid = false;
+                    inFile.close();
                     return header;
                 }
             }
@@ -430,6 +449,7 @@ Header* readJPG(std::ifstream& inFile) {
     if (header->numComponents != 1 && header->numComponents != 3) {
         std::cout << "Error - " << (uint)header->numComponents << " color components given (1 or 3 required)\n";
         header->valid = false;
+        inFile.close();
         return header;
     }
 
@@ -437,6 +457,7 @@ Header* readJPG(std::ifstream& inFile) {
         header->colorComponents[0].verticalSamplingFactor != 1) {
         std::cout << "Error - Unsupported sampling factor\n";
         header->valid = false;
+        inFile.close();
         return header;
     }
     if (header->numComponents == 3) {
@@ -444,12 +465,14 @@ Header* readJPG(std::ifstream& inFile) {
             header->colorComponents[1].verticalSamplingFactor != 1) {
             std::cout << "Error - Unsupported sampling factor\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
         if (header->colorComponents[2].horizontalSamplingFactor != 1 ||
             header->colorComponents[2].verticalSamplingFactor != 1) {
             std::cout << "Error - Unsupported sampling factor\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
     }
@@ -457,20 +480,24 @@ Header* readJPG(std::ifstream& inFile) {
         if (header->quantizationTables[header->colorComponents[i].quantizationTableID].set == false) {
             std::cout << "Error - Color component using uninitialized quantization table\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
         if (header->huffmanDCTables[header->colorComponents[i].huffmanDCTableID].set == false) {
             std::cout << "Error - Color component using uninitialized Huffman DC table\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
         if (header->huffmanACTables[header->colorComponents[i].huffmanACTableID].set == false) {
             std::cout << "Error - Color component using uninitialized Huffman AC table\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
     }
 
+    inFile.close();
     return header;
 }
 
@@ -542,7 +569,8 @@ void printHeader(const Header* const header) {
     std::cout << "Length of Huffman Data: " << header->huffmanData.size() << '\n';
 }
 
-void generateCodes(const HuffmanTable& hTable, int* codes) {
+// generate all Huffman codes based on symbols from a Huffman tables
+void generateCodes(const HuffmanTable& hTable, int* const codes) {
     int code = 0;
     for (uint j = 0; j < 16; ++j) {
         for (uint k = hTable.offsets[j]; k < hTable.offsets[j + 1]; ++k) {
@@ -553,6 +581,7 @@ void generateCodes(const HuffmanTable& hTable, int* codes) {
     }
 }
 
+// helper class to read bits from a byte vector
 class BitReader {
 private:
     uint nextByte = 0;
@@ -564,6 +593,7 @@ public:
     data(d)
     {}
 
+    // read one bit (0 or 1) or return -1 if all bits have already been read
     int readBit() {
         if (nextByte >= data.size()) {
             return -1;
@@ -577,6 +607,9 @@ public:
         return bit;
     }
 
+    // read a variable number of bits
+    // first read bit is most significant bit
+    // return -1 if at any point all bits have already been read
     int readBits(const uint length) {
         int bits = 0;
         for (uint i = 0; i < length; ++i) {
@@ -590,6 +623,8 @@ public:
         return bits;
     }
 
+    // if there are bits remaining,
+    //   advance to the 0th bit of the next byte
     void align() {
         if (nextByte >= data.size()) {
             return;
@@ -601,6 +636,8 @@ public:
     }
 };
 
+// return the symbol from the Huffman table that corresponds to
+//   the next Huffman code read from the BitReader
 byte getNextSymbol(BitReader& b, const int* const codes, const HuffmanTable& hTable) {
     int currentCode = b.readBit();
     for (uint j = 0; j < 16; ++j) {
@@ -614,7 +651,9 @@ byte getNextSymbol(BitReader& b, const int* const codes, const HuffmanTable& hTa
     return -1;
 }
 
-bool decodeMCUComponent(BitReader& b, int* component, const int previousDC,
+// fill the coefficients of an MCU component based on Huffman codes
+//   read from the BitReader
+bool decodeMCUComponent(BitReader& b, int* const component, const int previousDC,
                         const int* const dcCodes, const HuffmanTable& dcTable,
                         const int* const acCodes, const HuffmanTable& acTable) {
     // get the DC value for this MCU component
@@ -683,7 +722,16 @@ bool decodeMCUComponent(BitReader& b, int* component, const int previousDC,
     return true;
 }
 
-bool decodeHuffmanData(const Header* const header, MCU* mcus) {
+// decode all the Huffman data and fill all MCUs
+MCU* decodeHuffmanData(const Header* const header) {
+    const uint mcuHeight = (header->height + 7) / 8;
+    const uint mcuWidth = (header->width + 7) / 8;
+    MCU* mcus = new (std::nothrow) MCU[mcuHeight * mcuWidth];
+    if (mcus == nullptr) {
+        std::cout << "Error - Memory error\n";
+        return nullptr;
+    }
+
     BitReader b(header->huffmanData);
 
     int dcCodes[4][162];
@@ -707,27 +755,28 @@ bool decodeHuffmanData(const Header* const header, MCU* mcus) {
     int previousCbDC = 0;
     int previousCrDC = 0;
 
-    const uint mcuHeight = (header->height + 7) / 8;
-    const uint mcuWidth = (header->width + 7) / 8;
     uint numProcessed = 0;
     for (uint i = 0; i < mcuHeight * mcuWidth; ++i) {
         if (!decodeMCUComponent(b, mcus[i].y, previousYDC,
                                 dcCodes[yDCTableID], header->huffmanDCTables[yDCTableID],
                                 acCodes[yACTableID], header->huffmanACTables[yACTableID])) {
-            return false;
+            delete[] mcus;
+            return nullptr;
         }
         previousYDC = mcus[i].y[0];
         if (header->numComponents == 3) {
             if (!decodeMCUComponent(b, mcus[i].cb, previousCbDC,
                                     dcCodes[cbDCTableID], header->huffmanDCTables[cbDCTableID],
                                     acCodes[cbACTableID], header->huffmanACTables[cbACTableID])) {
-                return false;
+                delete[] mcus;
+                return nullptr;
             }
             previousCbDC = mcus[i].cb[0];
             if (!decodeMCUComponent(b, mcus[i].cr, previousCrDC,
                                     dcCodes[crDCTableID], header->huffmanDCTables[crDCTableID],
                                     acCodes[crACTableID], header->huffmanACTables[crACTableID])) {
-                return false;
+                delete[] mcus;
+                return nullptr;
             }
             previousCrDC = mcus[i].cr[0];
         }
@@ -740,16 +789,18 @@ bool decodeHuffmanData(const Header* const header, MCU* mcus) {
             b.align();
         }
     }
-    return true;
+    return mcus;
 }
 
-void dequantizeMCUComponent(const QuantizationTable& qTable, int* component) {
+// dequantize an MCU component based on a quantization table
+void dequantizeMCUComponent(const QuantizationTable& qTable, int* const component) {
     for (uint i = 0; i < 64; ++i) {
         component[zigZagMap[i]] *= qTable.table[i];
     }
 }
 
-void dequantize(const Header* const header, MCU* mcus) {
+// dequantize all MCUs
+void dequantize(const Header* const header, MCU* const mcus) {
     const uint mcuHeight = (header->height + 7) / 8;
     const uint mcuWidth = (header->width + 7) / 8;
     for (uint i = 0; i < mcuHeight * mcuWidth; ++i) {
@@ -761,7 +812,8 @@ void dequantize(const Header* const header, MCU* mcus) {
     }
 }
 
-void transformColumn(const double* const idctMap, const int* const in, double* out, const int offset) {
+// perform 1-D IDCT on one column of an MCU component
+void transformColumn(const double* const idctMap, const int* const in, double* const out, const int offset) {
     double temp;
     for (uint i = 0; i < 8; ++i) {
         temp = 0;
@@ -772,7 +824,8 @@ void transformColumn(const double* const idctMap, const int* const in, double* o
     }
 }
 
-void transformRow(const double* const idctMap, const double* const in, int* out, const int offset) {
+// perform 1-D IDCT on one row of an MCU component
+void transformRow(const double* const idctMap, const double* const in, int* const out, const int offset) {
     double temp;
     for (uint i = 0; i < 8; ++i) {
         temp = 0;
@@ -783,7 +836,9 @@ void transformRow(const double* const idctMap, const double* const in, int* out,
     }
 }
 
-void transformMCUComponent(const double* const idctMap, int* component) {
+// perform 1-D IDCT on all rows and columns of an MCU component
+//   resulting in 2-D IDCT
+void transformMCUComponent(const double* const idctMap, int* const component) {
     double temp[64];
     for (uint i = 0; i < 8; ++i) {
         transformColumn(idctMap, component, temp, i);
@@ -793,7 +848,8 @@ void transformMCUComponent(const double* const idctMap, int* component) {
     }
 }
 
-void inverseDCT(const Header* const header, MCU* mcus) {
+// perform IDCT on all MCUs
+void inverseDCT(const Header* const header, MCU* const mcus) {
     // prepare idctMap
     double idctMap[64];
     for (uint i = 0; i < 8; ++i) {
@@ -817,6 +873,7 @@ void inverseDCT(const Header* const header, MCU* mcus) {
     }
 }
 
+// convert a pixel from YCbCr color space to RGB
 void YCbCrToRGBPixel(int& y, int& cb, int& cr) {
     int r = y + 1.402 * cr + 128;
     int g = (y - (0.114 * (y + 1.772 * cb)) - 0.299 * (y + 1.402 * cr)) / 0.587 + 128;
@@ -832,7 +889,8 @@ void YCbCrToRGBPixel(int& y, int& cb, int& cr) {
     cr = b;
 }
 
-void YCbCrToRGB(const Header* const header, MCU* mcus) {
+// convert all pixels from YCbCr color space to RGB
+void YCbCrToRGB(const Header* const header, MCU* const mcus) {
     const uint mcuHeight = (header->height + 7) / 8;
     const uint mcuWidth = (header->width + 7) / 8;
     for (uint i = 0; i < mcuHeight * mcuWidth; ++i) {
@@ -842,28 +900,77 @@ void YCbCrToRGB(const Header* const header, MCU* mcus) {
     }
 }
 
+// helper function to write a 4-byte integer in little-endian
+void putInt(std::ofstream& outFile, const int v) {
+    outFile.put((v >>  0) & 0xFF);
+    outFile.put((v >>  8) & 0xFF);
+    outFile.put((v >> 16) & 0xFF);
+    outFile.put((v >> 24) & 0xFF);
+}
+
+// helper function to write a 2-byte short integer in little-endian
+void putShort(std::ofstream& outFile, const int v) {
+    outFile.put((v >>  0) & 0xFF);
+    outFile.put((v >>  8) & 0xFF);
+}
+
+// write all the pixels in the MCUs to a BMP file
+void writeBMP(const Header* const header, const MCU* const mcus, const std::string& filename) {
+    // open file
+    std::ofstream outFile = std::ofstream(filename, std::ios::out | std::ios::binary);
+    if (!outFile.is_open()) {
+        std::cout << "Error - Error opening output file\n";
+        return;
+    }
+
+    const uint mcuHeight = (header->height + 7) / 8;
+    const uint mcuWidth = (header->width + 7) / 8;
+    const uint paddingSize = (4 - (header->width * 3) % 4) % 4;
+    const uint size = 14 + 12 + header->height * header->width * 3 + header->height * paddingSize;
+
+    outFile.put('B');
+    outFile.put('M');
+    putInt(outFile, size);
+    putInt(outFile, 0);
+    putInt(outFile, 0x1A);
+    putInt(outFile, 12);
+    putShort(outFile, header->width);
+    putShort(outFile, header->height);
+    putShort(outFile, 1);
+    putShort(outFile, 24);
+
+    for (uint i = header->height - 1; i < header->height; --i) {
+        const uint mcuRow = i / 8;
+        const uint pixelRow = i % 8;
+        for (uint j = 0; j < header->width; ++j) {
+            const uint mcuColumn = j / 8;
+            const uint pixelColumn = j % 8;
+            const uint mcuIndex = mcuRow * mcuWidth + mcuColumn;
+            const uint pixelIndex = pixelRow * 8 + pixelColumn;
+            outFile.put(mcus[mcuIndex].b[pixelIndex]);
+            outFile.put(mcus[mcuIndex].g[pixelIndex]);
+            outFile.put(mcus[mcuIndex].r[pixelIndex]);
+        }
+        for (uint j = 0; j < paddingSize; ++j) {
+            outFile.put(0);
+        }
+    }
+
+    outFile.close();
+}
+
 int main(int argc, char** argv) {
     // validate arguments
     if (argc != 2) {
         std::cout << "Error - Invalid arguments\n";
         return 1;
     }
-
-    // open file
-    std::string filename = std::string(argv[1]);
-    std::ifstream inFile = std::ifstream(filename, std::ios::in | std::ios::binary);
-    if (!inFile.is_open()) {
-        std::cout << "Error - Error opening input file\n";
-        return 1;
-    }
+    const std::string filename(argv[1]);
 
     // read header
-    Header* header = readJPG(inFile);
-    inFile.close();
-
+    Header* header = readJPG(filename);
     // validate header
     if (header == nullptr) {
-        std::cout << "Error - Memory error\n";
         return 1;
     }
     if (header->valid == false) {
@@ -875,17 +982,8 @@ int main(int argc, char** argv) {
     printHeader(header);
 
     // decode Huffman data
-    const uint mcuHeight = (header->height + 7) / 8;
-    const uint mcuWidth = (header->width + 7) / 8;
-    MCU* mcus = new (std::nothrow) MCU[mcuHeight * mcuWidth];
+    MCU* mcus = decodeHuffmanData(header);
     if (mcus == nullptr) {
-        std::cout << "Error - Memory error\n";
-        delete header;
-        return 1;
-    }
-
-    if (!decodeHuffmanData(header, mcus)) {
-        delete[] mcus;
         delete header;
         return 1;
     }
@@ -898,6 +996,17 @@ int main(int argc, char** argv) {
 
     // color conversion
     YCbCrToRGB(header, mcus);
+
+    // write BMP file
+    std::size_t pos = filename.find_last_of('.');
+    std::string outFilename;
+    if (pos == std::string::npos) {
+        outFilename = filename + ".bmp";
+    }
+    else {
+        outFilename = filename.substr(0, pos) + ".bmp";
+    }
+    writeBMP(header, mcus, outFilename);
 
     delete[] mcus;
     delete header;
