@@ -817,6 +817,31 @@ void inverseDCT(const Header* const header, MCU* mcus) {
     }
 }
 
+void YCbCrToRGBPixel(int& y, int& cb, int& cr) {
+    int r = y + 1.402 * cr + 128;
+    int g = (y - (0.114 * (y + 1.772 * cb)) - 0.299 * (y + 1.402 * cr)) / 0.587 + 128;
+    int b = y + 1.772 * cb + 128;
+    if (r < 0)   r = 0;
+    if (r > 255) r = 255;
+    if (g < 0)   g = 0;
+    if (g > 255) g = 255;
+    if (b < 0)   b = 0;
+    if (b > 255) b = 255;
+    y  = r;
+    cb = g;
+    cr = b;
+}
+
+void YCbCrToRGB(const Header* const header, MCU* mcus) {
+    const uint mcuHeight = (header->height + 7) / 8;
+    const uint mcuWidth = (header->width + 7) / 8;
+    for (uint i = 0; i < mcuHeight * mcuWidth; ++i) {
+        for (uint j = 0; j < 64; ++j) {
+            YCbCrToRGBPixel(mcus[i].y[j], mcus[i].cb[j], mcus[i].cr[j]);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     // validate arguments
     if (argc != 2) {
@@ -870,6 +895,9 @@ int main(int argc, char** argv) {
 
     // Inverse Discrete Cosine Transform
     inverseDCT(header, mcus);
+
+    // color conversion
+    YCbCrToRGB(header, mcus);
 
     delete[] mcus;
     delete header;

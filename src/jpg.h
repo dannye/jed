@@ -138,9 +138,18 @@ struct Header {
 };
 
 struct MCU {
-    int y[64];
-    int cb[64];
-    int cr[64];
+    union {
+        int y[64];
+        int r[64];
+    };
+    union {
+        int cb[64];
+        int g [64];
+    };
+    union {
+        int cr[64];
+        int b [64];
+    };
 };
 
 const byte zigZagMap[] = {
