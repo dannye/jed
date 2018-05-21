@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <cmath>
 
 #include "jpg.h"
 
@@ -760,6 +761,62 @@ void dequantize(const Header* const header, MCU* mcus) {
     }
 }
 
+void transformColumn(const double* const idctMap, const int* const in, double* out, const int offset) {
+    double temp;
+    for (uint i = 0; i < 8; ++i) {
+        temp = 0;
+        for (uint j = 0; j < 8; ++j) {
+            temp += in[j * 8 + offset] * idctMap[j * 8 + i];
+        }
+        out[i * 8 + offset] = temp;
+    }
+}
+
+void transformRow(const double* const idctMap, const double* const in, int* out, const int offset) {
+    double temp;
+    for (uint i = 0; i < 8; ++i) {
+        temp = 0;
+        for (uint j = 0; j < 8; ++j) {
+            temp += in[offset * 8 + j] * idctMap[j * 8 + i];
+        }
+        out[offset * 8 + i] = (int)temp;
+    }
+}
+
+void transformMCUComponent(const double* const idctMap, int* component) {
+    double temp[64];
+    for (uint i = 0; i < 8; ++i) {
+        transformColumn(idctMap, component, temp, i);
+    }
+    for (uint i = 0; i < 8; ++i) {
+        transformRow(idctMap, temp, component, i);
+    }
+}
+
+void inverseDCT(const Header* const header, MCU* mcus) {
+    // prepare idctMap
+    double idctMap[64];
+    for (uint i = 0; i < 8; ++i) {
+        double c = 1.0 / 2.0;
+        if (i == 0){
+            c = 1.0 / std::sqrt(2.0) / 2.0;
+        }
+        for (uint j = 0; j < 8; ++j) {
+            idctMap[i * 8 + j] = c * std::cos((2.0 * j + 1.0) * i * M_PI / 16.0);
+        }
+    }
+
+    const uint mcuHeight = (header->height + 7) / 8;
+    const uint mcuWidth = (header->width + 7) / 8;
+    for (uint i = 0; i < mcuHeight * mcuWidth; ++i) {
+        transformMCUComponent(idctMap, mcus[i].y);
+        if (header->numComponents == 3) {
+            transformMCUComponent(idctMap, mcus[i].cb);
+            transformMCUComponent(idctMap, mcus[i].cr);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     // validate arguments
     if (argc != 2) {
@@ -810,6 +867,9 @@ int main(int argc, char** argv) {
 
     // dequantize MCU coefficients
     dequantize(header, mcus);
+
+    // Inverse Discrete Cosine Transform
+    inverseDCT(header, mcus);
 
     delete[] mcus;
     delete header;
