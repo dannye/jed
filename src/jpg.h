@@ -137,6 +137,12 @@ struct Header {
     bool valid = true;
 };
 
+struct MCU {
+    int y[64];
+    int cb[64];
+    int cr[64];
+};
+
 const byte zigZagMap[] = {
     0,   1,  8, 16,  9,  2,  3, 10,
     17, 24, 32, 25, 18, 11,  4,  5,

@@ -474,7 +474,7 @@ Header* readJPG(std::ifstream& inFile) {
 }
 
 // print all info extracted from the JPG file
-void printHeader(Header* header) {
+void printHeader(const Header* const header) {
     if (header == nullptr) return;
     std::cout << "DQT=============\n";
     for (uint i = 0; i < 4; ++i) {
@@ -541,6 +541,207 @@ void printHeader(Header* header) {
     std::cout << "Length of Huffman Data: " << header->huffmanData.size() << '\n';
 }
 
+void generateCodes(const HuffmanTable& hTable, int* codes) {
+    int code = 0;
+    for (uint j = 0; j < 16; ++j) {
+        for (uint k = hTable.offsets[j]; k < hTable.offsets[j + 1]; ++k) {
+            codes[k] = code;
+            code += 1;
+        }
+        code <<= 1;
+    }
+}
+
+class BitReader {
+private:
+    uint nextByte = 0;
+    uint nextBit = 0;
+    const std::vector<byte>& data;
+
+public:
+    BitReader(const std::vector<byte>& d) :
+    data(d)
+    {}
+
+    int readBit() {
+        if (nextByte >= data.size()) {
+            return -1;
+        }
+        int bit = (data[nextByte] >> (7 - nextBit)) & 1;
+        nextBit += 1;
+        if (nextBit == 8) {
+            nextBit = 0;
+            nextByte += 1;
+        }
+        return bit;
+    }
+
+    int readBits(const uint length) {
+        int bits = 0;
+        for (uint i = 0; i < length; ++i) {
+            int bit = readBit();
+            if (bit == -1) {
+                bits = -1;
+                break;
+            }
+            bits = (bits << 1) | bit;
+        }
+        return bits;
+    }
+
+    void align() {
+        if (nextByte >= data.size()) {
+            return;
+        }
+        if (nextBit != 0) {
+            nextBit = 0;
+            nextByte += 1;
+        }
+    }
+};
+
+byte getNextSymbol(BitReader& b, const int* const codes, const HuffmanTable& hTable) {
+    int currentCode = b.readBit();
+    for (uint j = 0; j < 16; ++j) {
+        for (uint k = hTable.offsets[j]; k < hTable.offsets[j + 1]; ++k) {
+            if (currentCode == codes[k]) {
+                return hTable.symbols[k];
+            }
+        }
+        currentCode = (currentCode << 1) | b.readBit();
+    }
+    return -1;
+}
+
+bool decodeMCUComponent(BitReader& b, int* component, const int previousDC,
+                        const int* const dcCodes, const HuffmanTable& dcTable,
+                        const int* const acCodes, const HuffmanTable& acTable) {
+    // get the DC value for this MCU component
+    byte length = getNextSymbol(b, dcCodes, dcTable);
+    if (length == (byte)-1) {
+        std::cout << "Error - Invalid DC value\n";
+        return false;
+    }
+    int coeff = b.readBits(length);
+    if (coeff == -1) {
+        std::cout << "Error - Invalid DC value\n";
+        return false;
+    }
+    if (length != 0 && coeff < (1 << (length - 1))) {
+        coeff -= (1 << length) - 1;
+    }
+    component[0] = coeff + previousDC;
+
+    // get the AC values for this MCU component
+    for (uint i = 1; i < 64; ++i) {
+        byte symbol = getNextSymbol(b, acCodes, acTable);
+        if (symbol == -1) {
+            std::cout << "Error - Invalid AC value\n";
+            return false;
+        }
+
+        // symbol 0 means fill remainder of component with 0
+        if (symbol == 0) {
+            for (; i < 64; ++i) {
+                component[zigZagMap[i]] = 0;
+            }
+            return true;
+        }
+
+        // otherwise, read next component coefficient
+        byte numZeroes = symbol >> 4;
+        byte coeffLength = symbol & 0x0F;
+        coeff = 0;
+
+        for (uint j = 0; j < numZeroes && i < 64; ++j, ++i) {
+            component[zigZagMap[i]] = 0;
+        }
+
+        if (coeffLength > 10) {
+            std::cout << "Error - Coefficient length greater than 10\n";
+            return false;
+        }
+
+        if (coeffLength != 0) {
+            if (i == 64) {
+                std::cout << "Error - Zero run-length exceeded MCU\n";
+                return false;
+            }
+
+            coeff = b.readBits(coeffLength);
+            if (coeff == -1) {
+                std::cout << "Error - Invalid AC value\n";
+                return false;
+            }
+            if (coeff < (1 << (coeffLength - 1))) {
+                coeff -= (1 << coeffLength) - 1;
+            }
+            component[zigZagMap[i]] = coeff;
+        }
+    }
+    return true;
+}
+
+bool decodeHuffmanData(const Header* const header, MCU* mcus) {
+    BitReader b(header->huffmanData);
+
+    int dcCodes[4][162];
+    int acCodes[4][162];
+    for (uint i = 0; i < 4; ++i) {
+        if (header->huffmanDCTables[i].set) {
+            generateCodes(header->huffmanDCTables[i], dcCodes[i]);
+        }
+        if (header->huffmanACTables[i].set) {
+            generateCodes(header->huffmanACTables[i], acCodes[i]);
+        }
+    }
+
+    const byte yDCTableID  = header->colorComponents[0].huffmanDCTableID;
+    const byte yACTableID  = header->colorComponents[0].huffmanACTableID;
+    const byte cbDCTableID = header->colorComponents[1].huffmanDCTableID;
+    const byte cbACTableID = header->colorComponents[1].huffmanACTableID;
+    const byte crDCTableID = header->colorComponents[2].huffmanDCTableID;
+    const byte crACTableID = header->colorComponents[2].huffmanACTableID;
+    int previousYDC  = 0;
+    int previousCbDC = 0;
+    int previousCrDC = 0;
+
+    const uint mcuHeight = (header->height + 7) / 8;
+    const uint mcuWidth = (header->width + 7) / 8;
+    uint numProcessed = 0;
+    for (uint i = 0; i < mcuHeight * mcuWidth; ++i) {
+        if (!decodeMCUComponent(b, mcus[i].y, previousYDC,
+                                dcCodes[yDCTableID], header->huffmanDCTables[yDCTableID],
+                                acCodes[yACTableID], header->huffmanACTables[yACTableID])) {
+            return false;
+        }
+        previousYDC = mcus[i].y[0];
+        if (header->numComponents == 3) {
+            if (!decodeMCUComponent(b, mcus[i].cb, previousCbDC,
+                                    dcCodes[cbDCTableID], header->huffmanDCTables[cbDCTableID],
+                                    acCodes[cbACTableID], header->huffmanACTables[cbACTableID])) {
+                return false;
+            }
+            previousCbDC = mcus[i].cb[0];
+            if (!decodeMCUComponent(b, mcus[i].cr, previousCrDC,
+                                    dcCodes[crDCTableID], header->huffmanDCTables[crDCTableID],
+                                    acCodes[crACTableID], header->huffmanACTables[crACTableID])) {
+                return false;
+            }
+            previousCrDC = mcus[i].cr[0];
+        }
+
+        numProcessed += 1;
+        if (header->restartInterval != 0 && numProcessed % header->restartInterval == 0) {
+            previousYDC  = 0;
+            previousCbDC = 0;
+            previousCrDC = 0;
+            b.align();
+        }
+    }
+    return true;
+}
+
 int main(int argc, char** argv) {
     // validate arguments
     if (argc != 2) {
@@ -573,6 +774,23 @@ int main(int argc, char** argv) {
 
     printHeader(header);
 
+    // decode Huffman data
+    const uint mcuHeight = (header->height + 7) / 8;
+    const uint mcuWidth = (header->width + 7) / 8;
+    MCU* mcus = new (std::nothrow) MCU[mcuHeight * mcuWidth];
+    if (mcus == nullptr) {
+        std::cout << "Error - Memory error\n";
+        delete header;
+        return 1;
+    }
+
+    if (!decodeHuffmanData(header, mcus)) {
+        delete[] mcus;
+        delete header;
+        return 1;
+    }
+
+    delete[] mcus;
     delete header;
     return 0;
 }
