@@ -742,6 +742,24 @@ bool decodeHuffmanData(const Header* const header, MCU* mcus) {
     return true;
 }
 
+void dequantizeMCUComponent(const QuantizationTable& qTable, int* component) {
+    for (uint i = 0; i < 64; ++i) {
+        component[zigZagMap[i]] *= qTable.table[i];
+    }
+}
+
+void dequantize(const Header* const header, MCU* mcus) {
+    const uint mcuHeight = (header->height + 7) / 8;
+    const uint mcuWidth = (header->width + 7) / 8;
+    for (uint i = 0; i < mcuHeight * mcuWidth; ++i) {
+        dequantizeMCUComponent(header->quantizationTables[header->colorComponents[0].quantizationTableID], mcus[i].y);
+        if (header->numComponents == 3) {
+            dequantizeMCUComponent(header->quantizationTables[header->colorComponents[1].quantizationTableID], mcus[i].cb);
+            dequantizeMCUComponent(header->quantizationTables[header->colorComponents[2].quantizationTableID], mcus[i].cr);
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     // validate arguments
     if (argc != 2) {
@@ -789,6 +807,9 @@ int main(int argc, char** argv) {
         delete header;
         return 1;
     }
+
+    // dequantize MCU coefficients
+    dequantize(header, mcus);
 
     delete[] mcus;
     delete header;
