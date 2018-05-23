@@ -93,13 +93,13 @@ const byte COM = 0xFE;
 const byte TEM = 0x01;
 
 struct QuantizationTable {
-    uint table[64];
+    uint table[64] = { 0 };
     bool set = false;
 };
 
 struct HuffmanTable {
-    byte offsets[17];
-    byte symbols[162];
+    byte offsets[17] = { 0 };
+    byte symbols[162] = { 0 };
     bool set = false;
 };
 
@@ -139,15 +139,15 @@ struct Header {
 
 struct MCU {
     union {
-        int y[64];
+        int y[64] = { 0 };
         int r[64];
     };
     union {
-        int cb[64];
+        int cb[64] = { 0 };
         int g [64];
     };
     union {
-        int cr[64];
+        int cr[64] = { 0 };
         int b [64];
     };
 };

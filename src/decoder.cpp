@@ -961,54 +961,51 @@ void writeBMP(const Header* const header, const MCU* const mcus, const std::stri
 
 int main(int argc, char** argv) {
     // validate arguments
-    if (argc != 2) {
+    if (argc < 2) {
         std::cout << "Error - Invalid arguments\n";
         return 1;
     }
-    const std::string filename(argv[1]);
 
-    // read header
-    Header* header = readJPG(filename);
-    // validate header
-    if (header == nullptr) {
-        return 1;
-    }
-    if (header->valid == false) {
-        std::cout << "Error - Invalid JPG\n";
+    for (int i = 1; i < argc; ++i) {
+        const std::string filename(argv[i]);
+
+        // read header
+        Header* header = readJPG(filename);
+        // validate header
+        if (header == nullptr) {
+            continue;
+        }
+        if (header->valid == false) {
+            std::cout << "Error - Invalid JPG\n";
+            delete header;
+            continue;
+        }
+
+        printHeader(header);
+
+        // decode Huffman data
+        MCU* mcus = decodeHuffmanData(header);
+        if (mcus == nullptr) {
+            delete header;
+            continue;
+        }
+
+        // dequantize MCU coefficients
+        dequantize(header, mcus);
+
+        // Inverse Discrete Cosine Transform
+        inverseDCT(header, mcus);
+
+        // color conversion
+        YCbCrToRGB(header, mcus);
+
+        // write BMP file
+        const std::size_t pos = filename.find_last_of('.');
+        const std::string outFilename = (pos == std::string::npos) ? (filename + ".bmp") : (filename.substr(0, pos) + ".bmp");
+        writeBMP(header, mcus, outFilename);
+
+        delete[] mcus;
         delete header;
-        return 1;
     }
-
-    printHeader(header);
-
-    // decode Huffman data
-    MCU* mcus = decodeHuffmanData(header);
-    if (mcus == nullptr) {
-        delete header;
-        return 1;
-    }
-
-    // dequantize MCU coefficients
-    dequantize(header, mcus);
-
-    // Inverse Discrete Cosine Transform
-    inverseDCT(header, mcus);
-
-    // color conversion
-    YCbCrToRGB(header, mcus);
-
-    // write BMP file
-    std::size_t pos = filename.find_last_of('.');
-    std::string outFilename;
-    if (pos == std::string::npos) {
-        outFilename = filename + ".bmp";
-    }
-    else {
-        outFilename = filename.substr(0, pos) + ".bmp";
-    }
-    writeBMP(header, mcus, outFilename);
-
-    delete[] mcus;
-    delete header;
     return 0;
 }
