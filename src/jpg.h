@@ -100,6 +100,7 @@ struct QuantizationTable {
 struct HuffmanTable {
     byte offsets[17] = { 0 };
     byte symbols[162] = { 0 };
+    uint codes[162] = { 0 };
     bool set = false;
 };
 
@@ -150,6 +151,18 @@ struct MCU {
         int cr[64] = { 0 };
         int b [64];
     };
+    int* operator[](uint i) {
+        switch (i) {
+            case 0:
+                return y;
+            case 1:
+                return cb;
+            case 2:
+                return cr;
+            default:
+                return nullptr;
+        }
+    }
 };
 
 const byte zigZagMap[] = {

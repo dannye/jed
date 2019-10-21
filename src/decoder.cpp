@@ -7,6 +7,7 @@
 
 // SOF specifies frame type, dimensions, and number of color components
 void readStartOfFrame(std::ifstream& inFile, Header* const header) {
+    std::cout << "Reading SOF Marker\n";
     if (header->numComponents != 0) {
         std::cout << "Error - Multiple SOFs detected\n";
         header->valid = false;
@@ -86,6 +87,7 @@ void readStartOfFrame(std::ifstream& inFile, Header* const header) {
 
 // DQT contains one or more quantization tables
 void readQuantizationTable(std::ifstream& inFile, Header* const header) {
+    std::cout << "Reading DQT Marker\n";
     int length = (inFile.get() << 8) + inFile.get();
     length -= 2;
 
@@ -103,13 +105,13 @@ void readQuantizationTable(std::ifstream& inFile, Header* const header) {
 
         if (tableInfo >> 4 != 0) {
             for (uint i = 0; i < 64; ++i) {
-                header->quantizationTables[tableID].table[i] = (inFile.get() << 8) + inFile.get();
+                header->quantizationTables[tableID].table[zigZagMap[i]] = (inFile.get() << 8) + inFile.get();
             }
             length -= 128;
         }
         else {
             for (uint i = 0; i < 64; ++i) {
-                header->quantizationTables[tableID].table[i] = inFile.get();
+                header->quantizationTables[tableID].table[zigZagMap[i]] = inFile.get();
             }
             length -= 64;
         }
@@ -123,6 +125,7 @@ void readQuantizationTable(std::ifstream& inFile, Header* const header) {
 
 // DHT contains one or more Huffman tables
 void readHuffmanTable(std::ifstream& inFile, Header* const header) {
+    std::cout << "Reading DHT Marker\n";
     int length = (inFile.get() << 8) + inFile.get();
     length -= 2;
 
@@ -172,6 +175,7 @@ void readHuffmanTable(std::ifstream& inFile, Header* const header) {
 
 // SOS contains color component info for the next scan
 void readStartOfScan(std::ifstream& inFile, Header* const header) {
+    std::cout << "Reading SOS Marker\n";
     if (header->numComponents == 0) {
         std::cout << "Error - SOS detected before SOF\n";
         header->valid = false;
@@ -247,6 +251,7 @@ void readStartOfScan(std::ifstream& inFile, Header* const header) {
 
 // restart interval is needed to stay synchronized during data scans
 void readRestartInterval(std::ifstream& inFile, Header* const header) {
+    std::cout << "Reading DRI Marker\n";
     uint length = (inFile.get() << 8) + inFile.get();
 
     header->restartInterval = (inFile.get() << 8) + inFile.get();
@@ -258,6 +263,7 @@ void readRestartInterval(std::ifstream& inFile, Header* const header) {
 
 // APPNs simply get skipped based on length
 void readAPPN(std::ifstream& inFile, Header* const header) {
+    std::cout << "Reading APPN Marker\n";
     uint length = (inFile.get() << 8) + inFile.get();
 
     for (uint i = 0; i < length - 2; ++i) {
@@ -267,6 +273,7 @@ void readAPPN(std::ifstream& inFile, Header* const header) {
 
 // comments simply get skipped based on length
 void readComment(std::ifstream& inFile, Header* const header) {
+    std::cout << "Reading COM Marker\n";
     uint length = (inFile.get() << 8) + inFile.get();
 
     for (uint i = 0; i < length - 2; ++i) {
@@ -283,8 +290,6 @@ Header* readJPG(const std::string& filename) {
     }
 
     Header* header = new (std::nothrow) Header;
-    byte last, current;
-
     if (header == nullptr) {
         std::cout << "Error - Memory error\n";
         inFile.close();
@@ -292,8 +297,8 @@ Header* readJPG(const std::string& filename) {
     }
 
     // first two bytes must be 0xFF, SOI
-    last = inFile.get();
-    current = inFile.get();
+    byte last = inFile.get();
+    byte current = inFile.get();
     if (last != 0xFF || current != SOI) {
         header->valid = false;
         inFile.close();
@@ -384,6 +389,7 @@ Header* readJPG(const std::string& filename) {
         else if (current >= RST0 && current <= RST7) {
             std::cout << "Error - RSTN detected before SOS\n";
             header->valid = false;
+            inFile.close();
             return header;
         }
         else {
@@ -522,6 +528,13 @@ void printHeader(const Header* const header) {
     std::cout << "Frame Type: 0x" << std::hex << (uint)header->frameType << std::dec << '\n';
     std::cout << "Height: " << header->height << '\n';
     std::cout << "Width: " << header->width << '\n';
+    std::cout << "Color Components:\n";
+    for (uint i = 0; i < header->numComponents; ++i) {
+        std::cout << "Component ID: " << (i + 1) << '\n';
+        std::cout << "Horizontal Sampling Factor: " << (uint)header->colorComponents[i].horizontalSamplingFactor << '\n';
+        std::cout << "Vertical Sampling Factor: " << (uint)header->colorComponents[i].verticalSamplingFactor << '\n';
+        std::cout << "Quantization Table ID: " << (uint)header->colorComponents[i].quantizationTableID << '\n';
+    }
     std::cout << "DHT=============\n";
     std::cout << "DC Tables:\n";
     for (uint i = 0; i < 4; ++i) {
@@ -531,7 +544,7 @@ void printHeader(const Header* const header) {
             for (uint j = 0; j < 16; ++j) {
                 std::cout << (j + 1) << ": ";
                 for (uint k = header->huffmanDCTables[i].offsets[j]; k < header->huffmanDCTables[i].offsets[j + 1]; ++k) {
-                    std::cout << (uint)header->huffmanDCTables[i].symbols[k] << ' ';
+                    std::cout << std::hex << (uint)header->huffmanDCTables[i].symbols[k] << std::dec << ' ';
                 }
                 std::cout << '\n';
             }
@@ -545,7 +558,7 @@ void printHeader(const Header* const header) {
             for (uint j = 0; j < 16; ++j) {
                 std::cout << (j + 1) << ": ";
                 for (uint k = header->huffmanACTables[i].offsets[j]; k < header->huffmanACTables[i].offsets[j + 1]; ++k) {
-                    std::cout << (uint)header->huffmanACTables[i].symbols[k] << ' ';
+                    std::cout << std::hex << (uint)header->huffmanACTables[i].symbols[k] << std::dec << ' ';
                 }
                 std::cout << '\n';
             }
@@ -556,25 +569,23 @@ void printHeader(const Header* const header) {
     std::cout << "End of Selection: " << (uint)header->endOfSelection << '\n';
     std::cout << "Successive Approximation High: " << (uint)header->successiveApproximationHigh << '\n';
     std::cout << "Successive Approximation Low: " << (uint)header->successiveApproximationLow << '\n';
-    std::cout << "Restart Interval: " << (uint)header->restartInterval << '\n';
     std::cout << "Color Components:\n";
     for (uint i = 0; i < header->numComponents; ++i) {
         std::cout << "Component ID: " << (i + 1) << '\n';
-        std::cout << "Horizontal Sampling Factor: " << (uint)header->colorComponents[i].horizontalSamplingFactor << '\n';
-        std::cout << "Vertical Sampling Factor: " << (uint)header->colorComponents[i].verticalSamplingFactor << '\n';
-        std::cout << "Quantization Table ID: " << (uint)header->colorComponents[i].quantizationTableID << '\n';
         std::cout << "Huffman DC Table ID: " << (uint)header->colorComponents[i].huffmanDCTableID << '\n';
         std::cout << "Huffman AC Table ID: " << (uint)header->colorComponents[i].huffmanACTableID << '\n';
     }
     std::cout << "Length of Huffman Data: " << header->huffmanData.size() << '\n';
+    std::cout << "DRI=============\n";
+    std::cout << "Restart Interval: " << header->restartInterval << '\n';
 }
 
-// generate all Huffman codes based on symbols from a Huffman tables
-void generateCodes(const HuffmanTable& hTable, int* const codes) {
-    int code = 0;
-    for (uint j = 0; j < 16; ++j) {
-        for (uint k = hTable.offsets[j]; k < hTable.offsets[j + 1]; ++k) {
-            codes[k] = code;
+// generate all Huffman codes based on symbols from a Huffman table
+void generateCodes(HuffmanTable& hTable) {
+    uint code = 0;
+    for (uint i = 0; i < 16; ++i) {
+        for (uint j = hTable.offsets[i]; j < hTable.offsets[i + 1]; ++j) {
+            hTable.codes[j] = code;
             code += 1;
         }
         code <<= 1;
@@ -638,30 +649,39 @@ public:
 
 // return the symbol from the Huffman table that corresponds to
 //   the next Huffman code read from the BitReader
-byte getNextSymbol(BitReader& b, const int* const codes, const HuffmanTable& hTable) {
-    int currentCode = b.readBit();
-    for (uint j = 0; j < 16; ++j) {
-        for (uint k = hTable.offsets[j]; k < hTable.offsets[j + 1]; ++k) {
-            if (currentCode == codes[k]) {
-                return hTable.symbols[k];
+byte getNextSymbol(BitReader& b, const HuffmanTable& hTable) {
+    uint currentCode = 0;
+    for (uint i = 0; i < 16; ++i) {
+        int bit = b.readBit();
+        if (bit == -1) {
+            return -1;
+        }
+        currentCode = (currentCode << 1) | bit;
+        for (uint j = hTable.offsets[i]; j < hTable.offsets[i + 1]; ++j) {
+            if (currentCode == hTable.codes[j]) {
+                return hTable.symbols[j];
             }
         }
-        currentCode = (currentCode << 1) | b.readBit();
     }
     return -1;
 }
 
 // fill the coefficients of an MCU component based on Huffman codes
 //   read from the BitReader
-bool decodeMCUComponent(BitReader& b, int* const component, const int previousDC,
-                        const int* const dcCodes, const HuffmanTable& dcTable,
-                        const int* const acCodes, const HuffmanTable& acTable) {
+bool decodeMCUComponent(BitReader& b, int* const component, int& previousDC,
+                        const HuffmanTable& dcTable,
+                        const HuffmanTable& acTable) {
     // get the DC value for this MCU component
-    byte length = getNextSymbol(b, dcCodes, dcTable);
+    byte length = getNextSymbol(b, dcTable);
     if (length == (byte)-1) {
         std::cout << "Error - Invalid DC value\n";
         return false;
     }
+    if (length > 11) {
+        std::cout << "Error - DC coefficient length greater than 11\n";
+        return false;
+    }
+
     int coeff = b.readBits(length);
     if (coeff == -1) {
         std::cout << "Error - Invalid DC value\n";
@@ -671,17 +691,19 @@ bool decodeMCUComponent(BitReader& b, int* const component, const int previousDC
         coeff -= (1 << length) - 1;
     }
     component[0] = coeff + previousDC;
+    previousDC = component[0];
 
     // get the AC values for this MCU component
-    for (uint i = 1; i < 64; ++i) {
-        byte symbol = getNextSymbol(b, acCodes, acTable);
-        if (symbol == -1) {
+    uint i = 1;
+    while (i < 64) {
+        byte symbol = getNextSymbol(b, acTable);
+        if (symbol == (byte)-1) {
             std::cout << "Error - Invalid AC value\n";
             return false;
         }
 
-        // symbol 0 means fill remainder of component with 0
-        if (symbol == 0) {
+        // symbol 0x00 means fill remainder of component with 0
+        if (symbol == 0x00) {
             for (; i < 64; ++i) {
                 component[zigZagMap[i]] = 0;
             }
@@ -693,21 +715,24 @@ bool decodeMCUComponent(BitReader& b, int* const component, const int previousDC
         byte coeffLength = symbol & 0x0F;
         coeff = 0;
 
-        for (uint j = 0; j < numZeroes && i < 64; ++j, ++i) {
+        // symbol 0xF0 means skip 16 0's
+        if (symbol == 0xF0) {
+            numZeroes = 16;
+        }
+
+        if (i + numZeroes >= 64) {
+            std::cout << "Error - Zero run-length exceeded MCU\n";
+            return false;
+        }
+        for (uint j = 0; j < numZeroes; ++j, ++i) {
             component[zigZagMap[i]] = 0;
         }
 
         if (coeffLength > 10) {
-            std::cout << "Error - Coefficient length greater than 10\n";
+            std::cout << "Error - AC coefficient length greater than 10\n";
             return false;
         }
-
         if (coeffLength != 0) {
-            if (i == 64) {
-                std::cout << "Error - Zero run-length exceeded MCU\n";
-                return false;
-            }
-
             coeff = b.readBits(coeffLength);
             if (coeff == -1) {
                 std::cout << "Error - Invalid AC value\n";
@@ -717,13 +742,14 @@ bool decodeMCUComponent(BitReader& b, int* const component, const int previousDC
                 coeff -= (1 << coeffLength) - 1;
             }
             component[zigZagMap[i]] = coeff;
+            i += 1;
         }
     }
     return true;
 }
 
 // decode all the Huffman data and fill all MCUs
-MCU* decodeHuffmanData(const Header* const header) {
+MCU* decodeHuffmanData(Header* const header) {
     const uint mcuHeight = (header->height + 7) / 8;
     const uint mcuWidth = (header->width + 7) / 8;
     MCU* mcus = new (std::nothrow) MCU[mcuHeight * mcuWidth];
@@ -732,61 +758,37 @@ MCU* decodeHuffmanData(const Header* const header) {
         return nullptr;
     }
 
-    BitReader b(header->huffmanData);
-
-    int dcCodes[4][162];
-    int acCodes[4][162];
     for (uint i = 0; i < 4; ++i) {
         if (header->huffmanDCTables[i].set) {
-            generateCodes(header->huffmanDCTables[i], dcCodes[i]);
+            generateCodes(header->huffmanDCTables[i]);
         }
         if (header->huffmanACTables[i].set) {
-            generateCodes(header->huffmanACTables[i], acCodes[i]);
+            generateCodes(header->huffmanACTables[i]);
         }
     }
 
-    const byte yDCTableID  = header->colorComponents[0].huffmanDCTableID;
-    const byte yACTableID  = header->colorComponents[0].huffmanACTableID;
-    const byte cbDCTableID = header->colorComponents[1].huffmanDCTableID;
-    const byte cbACTableID = header->colorComponents[1].huffmanACTableID;
-    const byte crDCTableID = header->colorComponents[2].huffmanDCTableID;
-    const byte crACTableID = header->colorComponents[2].huffmanACTableID;
-    int previousYDC  = 0;
-    int previousCbDC = 0;
-    int previousCrDC = 0;
+    BitReader b(header->huffmanData);
 
-    uint numProcessed = 0;
+    int previousDCs[3] = { 0 };
+
     for (uint i = 0; i < mcuHeight * mcuWidth; ++i) {
-        if (!decodeMCUComponent(b, mcus[i].y, previousYDC,
-                                dcCodes[yDCTableID], header->huffmanDCTables[yDCTableID],
-                                acCodes[yACTableID], header->huffmanACTables[yACTableID])) {
-            delete[] mcus;
-            return nullptr;
-        }
-        previousYDC = mcus[i].y[0];
-        if (header->numComponents == 3) {
-            if (!decodeMCUComponent(b, mcus[i].cb, previousCbDC,
-                                    dcCodes[cbDCTableID], header->huffmanDCTables[cbDCTableID],
-                                    acCodes[cbACTableID], header->huffmanACTables[cbACTableID])) {
-                delete[] mcus;
-                return nullptr;
-            }
-            previousCbDC = mcus[i].cb[0];
-            if (!decodeMCUComponent(b, mcus[i].cr, previousCrDC,
-                                    dcCodes[crDCTableID], header->huffmanDCTables[crDCTableID],
-                                    acCodes[crACTableID], header->huffmanACTables[crACTableID])) {
-                delete[] mcus;
-                return nullptr;
-            }
-            previousCrDC = mcus[i].cr[0];
+        if (header->restartInterval != 0 && i % header->restartInterval == 0) {
+            previousDCs[0] = 0;
+            previousDCs[1] = 0;
+            previousDCs[2] = 0;
+            b.align();
         }
 
-        numProcessed += 1;
-        if (header->restartInterval != 0 && numProcessed % header->restartInterval == 0) {
-            previousYDC  = 0;
-            previousCbDC = 0;
-            previousCrDC = 0;
-            b.align();
+        for (uint j = 0; j < header->numComponents; ++j) {
+            if (!decodeMCUComponent(
+                    b,
+                    mcus[i][j],
+                    previousDCs[j],
+                    header->huffmanDCTables[header->colorComponents[j].huffmanDCTableID],
+                    header->huffmanACTables[header->colorComponents[j].huffmanACTableID])) {
+                delete[] mcus;
+                return nullptr;
+            }
         }
     }
     return mcus;
@@ -795,7 +797,7 @@ MCU* decodeHuffmanData(const Header* const header) {
 // dequantize an MCU component based on a quantization table
 void dequantizeMCUComponent(const QuantizationTable& qTable, int* const component) {
     for (uint i = 0; i < 64; ++i) {
-        component[zigZagMap[i]] *= qTable.table[i];
+        component[i] *= qTable.table[i];
     }
 }
 
@@ -804,10 +806,8 @@ void dequantize(const Header* const header, MCU* const mcus) {
     const uint mcuHeight = (header->height + 7) / 8;
     const uint mcuWidth = (header->width + 7) / 8;
     for (uint i = 0; i < mcuHeight * mcuWidth; ++i) {
-        dequantizeMCUComponent(header->quantizationTables[header->colorComponents[0].quantizationTableID], mcus[i].y);
-        if (header->numComponents == 3) {
-            dequantizeMCUComponent(header->quantizationTables[header->colorComponents[1].quantizationTableID], mcus[i].cb);
-            dequantizeMCUComponent(header->quantizationTables[header->colorComponents[2].quantizationTableID], mcus[i].cr);
+        for (uint j = 0; j < header->numComponents; ++j) {
+            dequantizeMCUComponent(header->quantizationTables[header->colorComponents[j].quantizationTableID], mcus[i][j]);
         }
     }
 }
@@ -925,8 +925,8 @@ void writeBMP(const Header* const header, const MCU* const mcus, const std::stri
 
     const uint mcuHeight = (header->height + 7) / 8;
     const uint mcuWidth = (header->width + 7) / 8;
-    const uint paddingSize = (4 - (header->width * 3) % 4) % 4;
-    const uint size = 14 + 12 + header->height * header->width * 3 + header->height * paddingSize;
+    const uint paddingSize = header->width % 4;
+    const uint size = 14 + 12 + header->height * header->width * 3 + paddingSize * header->height;
 
     outFile.put('B');
     outFile.put('M');
@@ -939,19 +939,19 @@ void writeBMP(const Header* const header, const MCU* const mcus, const std::stri
     putShort(outFile, 1);
     putShort(outFile, 24);
 
-    for (uint i = header->height - 1; i < header->height; --i) {
-        const uint mcuRow = i / 8;
-        const uint pixelRow = i % 8;
-        for (uint j = 0; j < header->width; ++j) {
-            const uint mcuColumn = j / 8;
-            const uint pixelColumn = j % 8;
+    for (uint y = header->height - 1; y < header->height; --y) {
+        const uint mcuRow = y / 8;
+        const uint pixelRow = y % 8;
+        for (uint x = 0; x < header->width; ++x) {
+            const uint mcuColumn = x / 8;
+            const uint pixelColumn = x % 8;
             const uint mcuIndex = mcuRow * mcuWidth + mcuColumn;
             const uint pixelIndex = pixelRow * 8 + pixelColumn;
             outFile.put(mcus[mcuIndex].b[pixelIndex]);
             outFile.put(mcus[mcuIndex].g[pixelIndex]);
             outFile.put(mcus[mcuIndex].r[pixelIndex]);
         }
-        for (uint j = 0; j < paddingSize; ++j) {
+        for (uint i = 0; i < paddingSize; ++i) {
             outFile.put(0);
         }
     }
