@@ -1,7 +1,5 @@
 #include <iostream>
 #include <fstream>
-#include <string>
-#include <cmath>
 
 #include "jpg.h"
 
@@ -72,6 +70,11 @@ void readStartOfFrame(std::ifstream& inFile, Header* const header) {
         byte samplingFactor = inFile.get();
         component->horizontalSamplingFactor = samplingFactor >> 4;
         component->verticalSamplingFactor = samplingFactor & 0x0F;
+        if (component->horizontalSamplingFactor != 1 || component->verticalSamplingFactor != 1) {
+            std::cout << "Error - Sampling factors not supported\n";
+            header->valid = false;
+            return;
+        }
         component->quantizationTableID = inFile.get();
         if (component->quantizationTableID > 3) {
             std::cout << "Error - Invalid quantization table ID in frame components\n";
@@ -459,29 +462,6 @@ Header* readJPG(const std::string& filename) {
         return header;
     }
 
-    if (header->colorComponents[0].horizontalSamplingFactor != 1 ||
-        header->colorComponents[0].verticalSamplingFactor != 1) {
-        std::cout << "Error - Unsupported sampling factor\n";
-        header->valid = false;
-        inFile.close();
-        return header;
-    }
-    if (header->numComponents == 3) {
-        if (header->colorComponents[1].horizontalSamplingFactor != 1 ||
-            header->colorComponents[1].verticalSamplingFactor != 1) {
-            std::cout << "Error - Unsupported sampling factor\n";
-            header->valid = false;
-            inFile.close();
-            return header;
-        }
-        if (header->colorComponents[2].horizontalSamplingFactor != 1 ||
-            header->colorComponents[2].verticalSamplingFactor != 1) {
-            std::cout << "Error - Unsupported sampling factor\n";
-            header->valid = false;
-            inFile.close();
-            return header;
-        }
-    }
     for (uint i = 0; i < header->numComponents; ++i) {
         if (header->quantizationTables[header->colorComponents[i].quantizationTableID].set == false) {
             std::cout << "Error - Color component using uninitialized quantization table\n";
@@ -812,63 +792,152 @@ void dequantize(const Header* const header, MCU* const mcus) {
     }
 }
 
-// perform 1-D IDCT on one column of an MCU component
-void transformColumn(const double* const idctMap, const int* const in, double* const out, const int offset) {
-    double temp;
-    for (uint i = 0; i < 8; ++i) {
-        temp = 0;
-        for (uint j = 0; j < 8; ++j) {
-            temp += in[j * 8 + offset] * idctMap[j * 8 + i];
-        }
-        out[i * 8 + offset] = temp;
-    }
-}
-
-// perform 1-D IDCT on one row of an MCU component
-void transformRow(const double* const idctMap, const double* const in, int* const out, const int offset) {
-    double temp;
-    for (uint i = 0; i < 8; ++i) {
-        temp = 0;
-        for (uint j = 0; j < 8; ++j) {
-            temp += in[offset * 8 + j] * idctMap[j * 8 + i];
-        }
-        out[offset * 8 + i] = (int)temp;
-    }
-}
-
-// perform 1-D IDCT on all rows and columns of an MCU component
+// perform 1-D IDCT on all columns and rows of an MCU component
 //   resulting in 2-D IDCT
-void transformMCUComponent(const double* const idctMap, int* const component) {
-    double temp[64];
+void inverseDCTComponent(int* const component) {
     for (uint i = 0; i < 8; ++i) {
-        transformColumn(idctMap, component, temp, i);
+        const float g0 = component[0 * 8 + i] * s0;
+        const float g1 = component[4 * 8 + i] * s4;
+        const float g2 = component[2 * 8 + i] * s2;
+        const float g3 = component[6 * 8 + i] * s6;
+        const float g4 = component[5 * 8 + i] * s5;
+        const float g5 = component[1 * 8 + i] * s1;
+        const float g6 = component[7 * 8 + i] * s7;
+        const float g7 = component[3 * 8 + i] * s3;
+
+        const float f0 = g0;
+        const float f1 = g1;
+        const float f2 = g2;
+        const float f3 = g3;
+        const float f4 = g4 - g7;
+        const float f5 = g5 + g6;
+        const float f6 = g5 - g6;
+        const float f7 = g4 + g7;
+
+        const float e0 = f0;
+        const float e1 = f1;
+        const float e2 = f2 - f3;
+        const float e3 = f2 + f3;
+        const float e4 = f4;
+        const float e5 = f5 - f7;
+        const float e6 = f6;
+        const float e7 = f5 + f7;
+        const float e8 = f4 + f6;
+
+        const float d0 = e0;
+        const float d1 = e1;
+        const float d2 = e2 * m1;
+        const float d3 = e3;
+        const float d4 = e4 * m2;
+        const float d5 = e5 * m3;
+        const float d6 = e6 * m4;
+        const float d7 = e7;
+        const float d8 = e8 * m5;
+
+        const float c0 = d0 + d1;
+        const float c1 = d0 - d1;
+        const float c2 = d2 - d3;
+        const float c3 = d3;
+        const float c4 = d4 + d8;
+        const float c5 = d5 + d7;
+        const float c6 = d6 - d8;
+        const float c7 = d7;
+        const float c8 = c5 - c6;
+
+        const float b0 = c0 + c3;
+        const float b1 = c1 + c2;
+        const float b2 = c1 - c2;
+        const float b3 = c0 - c3;
+        const float b4 = c4 - c8;
+        const float b5 = c8;
+        const float b6 = c6 - c7;
+        const float b7 = c7;
+
+        component[0 * 8 + i] = b0 + b7;
+        component[1 * 8 + i] = b1 + b6;
+        component[2 * 8 + i] = b2 + b5;
+        component[3 * 8 + i] = b3 + b4;
+        component[4 * 8 + i] = b3 - b4;
+        component[5 * 8 + i] = b2 - b5;
+        component[6 * 8 + i] = b1 - b6;
+        component[7 * 8 + i] = b0 - b7;
     }
     for (uint i = 0; i < 8; ++i) {
-        transformRow(idctMap, temp, component, i);
+        const float g0 = component[i * 8 + 0] * s0;
+        const float g1 = component[i * 8 + 4] * s4;
+        const float g2 = component[i * 8 + 2] * s2;
+        const float g3 = component[i * 8 + 6] * s6;
+        const float g4 = component[i * 8 + 5] * s5;
+        const float g5 = component[i * 8 + 1] * s1;
+        const float g6 = component[i * 8 + 7] * s7;
+        const float g7 = component[i * 8 + 3] * s3;
+
+        const float f0 = g0;
+        const float f1 = g1;
+        const float f2 = g2;
+        const float f3 = g3;
+        const float f4 = g4 - g7;
+        const float f5 = g5 + g6;
+        const float f6 = g5 - g6;
+        const float f7 = g4 + g7;
+
+        const float e0 = f0;
+        const float e1 = f1;
+        const float e2 = f2 - f3;
+        const float e3 = f2 + f3;
+        const float e4 = f4;
+        const float e5 = f5 - f7;
+        const float e6 = f6;
+        const float e7 = f5 + f7;
+        const float e8 = f4 + f6;
+
+        const float d0 = e0;
+        const float d1 = e1;
+        const float d2 = e2 * m1;
+        const float d3 = e3;
+        const float d4 = e4 * m2;
+        const float d5 = e5 * m3;
+        const float d6 = e6 * m4;
+        const float d7 = e7;
+        const float d8 = e8 * m5;
+
+        const float c0 = d0 + d1;
+        const float c1 = d0 - d1;
+        const float c2 = d2 - d3;
+        const float c3 = d3;
+        const float c4 = d4 + d8;
+        const float c5 = d5 + d7;
+        const float c6 = d6 - d8;
+        const float c7 = d7;
+        const float c8 = c5 - c6;
+
+        const float b0 = c0 + c3;
+        const float b1 = c1 + c2;
+        const float b2 = c1 - c2;
+        const float b3 = c0 - c3;
+        const float b4 = c4 - c8;
+        const float b5 = c8;
+        const float b6 = c6 - c7;
+        const float b7 = c7;
+
+        component[i * 8 + 0] = b0 + b7;
+        component[i * 8 + 1] = b1 + b6;
+        component[i * 8 + 2] = b2 + b5;
+        component[i * 8 + 3] = b3 + b4;
+        component[i * 8 + 4] = b3 - b4;
+        component[i * 8 + 5] = b2 - b5;
+        component[i * 8 + 6] = b1 - b6;
+        component[i * 8 + 7] = b0 - b7;
     }
 }
 
 // perform IDCT on all MCUs
 void inverseDCT(const Header* const header, MCU* const mcus) {
-    // prepare idctMap
-    double idctMap[64];
-    for (uint i = 0; i < 8; ++i) {
-        double c = 1.0 / 2.0;
-        if (i == 0){
-            c = 1.0 / std::sqrt(2.0) / 2.0;
-        }
-        for (uint j = 0; j < 8; ++j) {
-            idctMap[i * 8 + j] = c * std::cos((2.0 * j + 1.0) * i * M_PI / 16.0);
-        }
-    }
-
     const uint mcuHeight = (header->height + 7) / 8;
     const uint mcuWidth = (header->width + 7) / 8;
     for (uint i = 0; i < mcuHeight * mcuWidth; ++i) {
-        transformMCUComponent(idctMap, mcus[i].y);
-        if (header->numComponents == 3) {
-            transformMCUComponent(idctMap, mcus[i].cb);
-            transformMCUComponent(idctMap, mcus[i].cr);
+        for (uint j = 0; j < header->numComponents; ++j) {
+            inverseDCTComponent(mcus[i][j]);
         }
     }
 }

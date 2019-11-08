@@ -2,6 +2,7 @@
 #define JPG_H
 
 #include <vector>
+#include <cmath>
 
 typedef unsigned char byte;
 typedef unsigned int uint;
@@ -124,10 +125,10 @@ struct Header {
     byte numComponents = 0;
     bool zeroBased = false;
 
-    byte startOfSelection;
-    byte endOfSelection;
-    byte successiveApproximationHigh;
-    byte successiveApproximationLow;
+    byte startOfSelection = 0;
+    byte endOfSelection = 63;
+    byte successiveApproximationHigh = 0;
+    byte successiveApproximationLow = 0;
 
     uint restartInterval = 0;
 
@@ -175,5 +176,22 @@ const byte zigZagMap[] = {
     58, 59, 52, 45, 38, 31, 39, 46,
     53, 60, 61, 54, 47, 55, 62, 63
 };
+
+// IDCT scaling factors
+const float m0 = 2.0 * std::cos(1.0 / 16.0 * 2.0 * M_PI);
+const float m1 = 2.0 * std::cos(2.0 / 16.0 * 2.0 * M_PI);
+const float m3 = 2.0 * std::cos(2.0 / 16.0 * 2.0 * M_PI);
+const float m5 = 2.0 * std::cos(3.0 / 16.0 * 2.0 * M_PI);
+const float m2 = m0 - m5;
+const float m4 = m0 + m5;
+
+const float s0 = std::cos(0.0 / 16.0 * M_PI) / std::sqrt(8);
+const float s1 = std::cos(1.0 / 16.0 * M_PI) / 2.0;
+const float s2 = std::cos(2.0 / 16.0 * M_PI) / 2.0;
+const float s3 = std::cos(3.0 / 16.0 * M_PI) / 2.0;
+const float s4 = std::cos(4.0 / 16.0 * M_PI) / 2.0;
+const float s5 = std::cos(5.0 / 16.0 * M_PI) / 2.0;
+const float s6 = std::cos(6.0 / 16.0 * M_PI) / 2.0;
+const float s7 = std::cos(7.0 / 16.0 * M_PI) / 2.0;
 
 #endif

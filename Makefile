@@ -1,7 +1,7 @@
 all:
-	@mkdir build -p
-	g++ --std=c++11 -o build/encoder src/encoder.cpp
-	g++ --std=c++11 -o build/decoder src/decoder.cpp
+	@mkdir bin -p
+	g++ --std=c++11 -O3 -o bin/encoder src/encoder.cpp
+	g++ --std=c++11 -O3 -o bin/decoder src/decoder.cpp
 
 clean:
-	rm build/encoder build/decoder
+	rm -f bin/encoder bin/decoder
