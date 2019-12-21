@@ -137,6 +137,14 @@ struct Header {
     std::vector<byte> huffmanData;
 
     bool valid = true;
+
+    uint mcuHeight = 0;
+    uint mcuWidth = 0;
+    uint mcuHeightReal = 0;
+    uint mcuWidthReal = 0;
+
+    byte horizontalSamplingFactor = 1;
+    byte verticalSamplingFactor = 1;
 };
 
 struct MCU {
