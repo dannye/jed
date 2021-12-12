@@ -3,8 +3,97 @@
 
 #include "jpg.h"
 
+// helper class to read bits from a file
+class BitReader {
+private:
+    byte nextByte = 0;
+    byte nextBit = 0;
+    std::ifstream inFile;
+
+public:
+    BitReader(const std::string& filename) {
+        inFile.open(filename, std::ios::in | std::ios::binary);
+    }
+
+    ~BitReader() {
+        if (inFile.is_open()) {
+            inFile.close();
+        }
+    }
+
+    bool hasBits() {
+        return !!inFile;
+    }
+
+    byte readByte() {
+        nextBit = 0;
+        return inFile.get();
+    }
+
+    uint readWord() {
+        nextBit = 0;
+        return (inFile.get() << 8) + inFile.get();
+    }
+
+    // read one bit (0 or 1) or return -1 if all bits have already been read
+    uint readBit() {
+        if (nextBit == 0) {
+            if (!hasBits()) {
+                return -1;
+            }
+            nextByte = inFile.get();
+            while (nextByte == 0xFF) {
+                byte marker = inFile.peek();
+                // ignore multiple 0xFF's in a row
+                while (marker == 0xFF) {
+                    inFile.get();
+                    marker = inFile.peek();
+                }
+                // literal 0xFF's are encoded in the bitstream as 0xFF00
+                if (marker == 0x00) {
+                    inFile.get();
+                    break;
+                }
+                // restart marker
+                else if (marker >= RST0 && marker <= RST7) {
+                    inFile.get();
+                    nextByte = inFile.get();
+                }
+                else {
+                    std::cout << "Error - Invalid marker: 0x" << std::hex << (uint)marker << std::dec << '\n';
+                    return -1;
+                }
+            }
+        }
+        uint bit = (nextByte >> (7 - nextBit)) & 1;
+        nextBit = (nextBit + 1) % 8;
+        return bit;
+    }
+
+    // read a variable number of bits
+    // first read bit is most significant bit
+    // return -1 if at any point all bits have already been read
+    uint readBits(const uint length) {
+        uint bits = 0;
+        for (uint i = 0; i < length; ++i) {
+            uint bit = readBit();
+            if (bit == -1) {
+                bits = -1;
+                break;
+            }
+            bits = (bits << 1) | bit;
+        }
+        return bits;
+    }
+
+    // advance to the 0th bit of the next byte
+    void align() {
+        nextBit = 0;
+    }
+};
+
 // SOF specifies frame type, dimensions, and number of color components
-void readStartOfFrame(std::ifstream& inFile, JPGImage* const image) {
+void readStartOfFrame(BitReader& bitReader, JPGImage* const image) {
     std::cout << "Reading SOF Marker\n";
     if (image->numComponents != 0) {
         std::cout << "Error - Multiple SOFs detected\n";
@@ -12,17 +101,17 @@ void readStartOfFrame(std::ifstream& inFile, JPGImage* const image) {
         return;
     }
 
-    uint length = (inFile.get() << 8) + inFile.get();
+    uint length = bitReader.readWord();
 
-    byte precision = inFile.get();
+    byte precision = bitReader.readByte();
     if (precision != 8) {
         std::cout << "Error - Invalid precision: " << (uint)precision << '\n';
         image->valid = false;
         return;
     }
 
-    image->height = (inFile.get() << 8) + inFile.get();
-    image->width = (inFile.get() << 8) + inFile.get();
+    image->height = bitReader.readWord();
+    image->width = bitReader.readWord();
     if (image->height == 0 || image->width == 0) {
         std::cout << "Error - Invalid dimensions\n";
         image->valid = false;
@@ -33,7 +122,7 @@ void readStartOfFrame(std::ifstream& inFile, JPGImage* const image) {
     image->blockHeightReal = image->blockHeight;
     image->blockWidthReal = image->blockWidth;
 
-    image->numComponents = inFile.get();
+    image->numComponents = bitReader.readByte();
     if (image->numComponents == 4) {
         std::cout << "Error - CMYK color mode not supported\n";
         image->valid = false;
@@ -45,7 +134,7 @@ void readStartOfFrame(std::ifstream& inFile, JPGImage* const image) {
         return;
     }
     for (uint i = 0; i < image->numComponents; ++i) {
-        byte componentID = inFile.get();
+        byte componentID = bitReader.readByte();
         // component IDs are usually 1, 2, 3 but rarely can be seen as 0, 1, 2
         // always force them into 1, 2, 3 for consistency
         if (componentID == 0 && i == 0) {
@@ -67,7 +156,7 @@ void readStartOfFrame(std::ifstream& inFile, JPGImage* const image) {
         }
         component.usedInFrame = true;
 
-        byte samplingFactor = inFile.get();
+        byte samplingFactor = bitReader.readByte();
         component.horizontalSamplingFactor = samplingFactor >> 4;
         component.verticalSamplingFactor = samplingFactor & 0x0F;
         if (componentID == 1) {
@@ -83,6 +172,8 @@ void readStartOfFrame(std::ifstream& inFile, JPGImage* const image) {
             if (component.verticalSamplingFactor == 2 && image->blockHeight % 2 == 1) {
                 image->blockHeightReal += 1;
             }
+            image->horizontalSamplingFactor = component.horizontalSamplingFactor;
+            image->verticalSamplingFactor = component.verticalSamplingFactor;
         }
         else {
             if (component.horizontalSamplingFactor != 1 || component.verticalSamplingFactor != 1) {
@@ -92,7 +183,7 @@ void readStartOfFrame(std::ifstream& inFile, JPGImage* const image) {
             }
         }
 
-        component.quantizationTableID = inFile.get();
+        component.quantizationTableID = bitReader.readByte();
         if (component.quantizationTableID > 3) {
             std::cout << "Error - Invalid quantization table ID: " << (uint)component.quantizationTableID << '\n';
             image->valid = false;
@@ -108,13 +199,13 @@ void readStartOfFrame(std::ifstream& inFile, JPGImage* const image) {
 }
 
 // DQT contains one or more quantization tables
-void readQuantizationTable(std::ifstream& inFile, JPGImage* const image) {
+void readQuantizationTable(BitReader& bitReader, JPGImage* const image) {
     std::cout << "Reading DQT Marker\n";
-    int length = (inFile.get() << 8) + inFile.get();
+    int length = bitReader.readWord();
     length -= 2;
 
     while (length > 0) {
-        byte tableInfo = inFile.get();
+        byte tableInfo = bitReader.readByte();
         length -= 1;
         byte tableID = tableInfo & 0x0F;
 
@@ -128,13 +219,13 @@ void readQuantizationTable(std::ifstream& inFile, JPGImage* const image) {
 
         if (tableInfo >> 4 != 0) {
             for (uint i = 0; i < 64; ++i) {
-                qTable.table[zigZagMap[i]] = (inFile.get() << 8) + inFile.get();
+                qTable.table[zigZagMap[i]] = bitReader.readWord();
             }
             length -= 128;
         }
         else {
             for (uint i = 0; i < 64; ++i) {
-                qTable.table[zigZagMap[i]] = inFile.get();
+                qTable.table[zigZagMap[i]] = bitReader.readByte();
             }
             length -= 64;
         }
@@ -160,13 +251,13 @@ void generateCodes(HuffmanTable& hTable) {
 }
 
 // DHT contains one or more Huffman tables
-void readHuffmanTable(std::ifstream& inFile, JPGImage* const image) {
+void readHuffmanTable(BitReader& bitReader, JPGImage* const image) {
     std::cout << "Reading DHT Marker\n";
-    int length = (inFile.get() << 8) + inFile.get();
+    int length = bitReader.readWord();
     length -= 2;
 
     while (length > 0) {
-        byte tableInfo = inFile.get();
+        byte tableInfo = bitReader.readByte();
         byte tableID = tableInfo & 0x0F;
         bool acTable = tableInfo >> 4;
 
@@ -184,7 +275,7 @@ void readHuffmanTable(std::ifstream& inFile, JPGImage* const image) {
         hTable.offsets[0] = 0;
         uint allSymbols = 0;
         for (uint i = 1; i <= 16; ++i) {
-            allSymbols += inFile.get();
+            allSymbols += bitReader.readByte();
             hTable.offsets[i] = allSymbols;
         }
         if (allSymbols > 162) {
@@ -194,7 +285,7 @@ void readHuffmanTable(std::ifstream& inFile, JPGImage* const image) {
         }
 
         for (uint i = 0; i < allSymbols; ++i) {
-            hTable.symbols[i] = inFile.get();
+            hTable.symbols[i] = bitReader.readByte();
         }
 
         generateCodes(hTable);
@@ -210,7 +301,7 @@ void readHuffmanTable(std::ifstream& inFile, JPGImage* const image) {
 }
 
 // SOS contains color component info for the next scan
-void readStartOfScan(std::ifstream& inFile, JPGImage* const image) {
+void readStartOfScan(BitReader& bitReader, JPGImage* const image) {
     std::cout << "Reading SOS Marker\n";
     if (image->numComponents == 0) {
         std::cout << "Error - SOS detected before SOF\n";
@@ -218,24 +309,22 @@ void readStartOfScan(std::ifstream& inFile, JPGImage* const image) {
         return;
     }
 
-    uint length = (inFile.get() << 8) + inFile.get();
+    uint length = bitReader.readWord();
 
-    image->horizontalSamplingFactor = 0;
-    image->verticalSamplingFactor = 0;
     for (uint i = 0; i < image->numComponents; ++i) {
         image->colorComponents[i].usedInScan = false;
     }
 
     // the number of components in the next scan might not be all
     //   components in the image
-    image->componentsInScan = inFile.get();
+    image->componentsInScan = bitReader.readByte();
     if (image->componentsInScan == 0) {
         std::cout << "Error - Scan must include at least 1 component\n";
         image->valid = false;
         return;
     }
     for (uint i = 0; i < image->componentsInScan; ++i) {
-        byte componentID = inFile.get();
+        byte componentID = bitReader.readByte();
         // component IDs are usually 1, 2, 3 but rarely can be seen as 0, 1, 2
         if (image->zeroBased) {
             componentID += 1;
@@ -258,7 +347,7 @@ void readStartOfScan(std::ifstream& inFile, JPGImage* const image) {
         }
         component.usedInScan = true;
 
-        byte huffmanTableIDs = inFile.get();
+        byte huffmanTableIDs = bitReader.readByte();
         component.huffmanDCTableID = huffmanTableIDs >> 4;
         component.huffmanACTableID = huffmanTableIDs & 0x0F;
         if (component.huffmanDCTableID > 3) {
@@ -271,31 +360,54 @@ void readStartOfScan(std::ifstream& inFile, JPGImage* const image) {
             image->valid = false;
             return;
         }
-
-        if (component.horizontalSamplingFactor > image->horizontalSamplingFactor) {
-            image->horizontalSamplingFactor = component.horizontalSamplingFactor;
-        }
-        if (component.verticalSamplingFactor > image->verticalSamplingFactor) {
-            image->verticalSamplingFactor = component.verticalSamplingFactor;
-        }
     }
 
-    image->startOfSelection = inFile.get();
-    image->endOfSelection = inFile.get();
-    byte successiveApproximation = inFile.get();
+    image->startOfSelection = bitReader.readByte();
+    image->endOfSelection = bitReader.readByte();
+    byte successiveApproximation = bitReader.readByte();
     image->successiveApproximationHigh = successiveApproximation >> 4;
     image->successiveApproximationLow = successiveApproximation & 0x0F;
 
-    // Baseline JPGs don't use spectral selection or successive approximtion
-    if (image->startOfSelection != 0 || image->endOfSelection != 63) {
-        std::cout << "Error - Invalid spectral selection\n";
-        image->valid = false;
-        return;
+    if (image->frameType == SOF0) {
+        // Baseline JPGs don't use spectral selection or successive approximtion
+        if (image->startOfSelection != 0 || image->endOfSelection != 63) {
+            std::cout << "Error - Invalid spectral selection\n";
+            image->valid = false;
+            return;
+        }
+        if (image->successiveApproximationHigh != 0 || image->successiveApproximationLow != 0) {
+            std::cout << "Error - Invalid successive approximation\n";
+            image->valid = false;
+            return;
+        }
     }
-    if (image->successiveApproximationHigh != 0 || image->successiveApproximationLow != 0) {
-        std::cout << "Error - Invalid successive approximation\n";
-        image->valid = false;
-        return;
+    else if (image->frameType == SOF2) {
+        if (image->startOfSelection > image->endOfSelection) {
+            std::cout << "Error - Invalid spectral selection (start greater than end)\n";
+            image->valid = false;
+            return;
+        }
+        if (image->endOfSelection > 63) {
+            std::cout << "Error - Invalid spectral selection (end greater than 63)\n";
+            image->valid = false;
+            return;
+        }
+        if (image->startOfSelection == 0 && image->endOfSelection != 0) {
+            std::cout << "Error - Invalid spectral selection (contains DC and AC)\n";
+            image->valid = false;
+            return;
+        }
+        if (image->startOfSelection != 0 && image->componentsInScan != 1) {
+            std::cout << "Error - Invalid spectral selection (AC scan contains multiple components)\n";
+            image->valid = false;
+            return;
+        }
+        if (image->successiveApproximationHigh != 0 &&
+            image->successiveApproximationLow != image->successiveApproximationHigh - 1) {
+            std::cout << "Error - Invalid successive approximation\n";
+            image->valid = false;
+            return;
+        }
     }
 
     for (uint i = 0; i < image->numComponents; ++i) {
@@ -331,11 +443,11 @@ void readStartOfScan(std::ifstream& inFile, JPGImage* const image) {
 }
 
 // restart interval is needed to stay synchronized during data scans
-void readRestartInterval(std::ifstream& inFile, JPGImage* const image) {
+void readRestartInterval(BitReader& bitReader, JPGImage* const image) {
     std::cout << "Reading DRI Marker\n";
-    uint length = (inFile.get() << 8) + inFile.get();
+    uint length = bitReader.readWord();
 
-    image->restartInterval = (inFile.get() << 8) + inFile.get();
+    image->restartInterval = bitReader.readWord();
     if (length - 4 != 0) {
         std::cout << "Error - DRI invalid\n";
         image->valid = false;
@@ -344,9 +456,9 @@ void readRestartInterval(std::ifstream& inFile, JPGImage* const image) {
 }
 
 // APPNs simply get skipped based on length
-void readAPPN(std::ifstream& inFile, JPGImage* const image) {
+void readAPPN(BitReader& bitReader, JPGImage* const image) {
     std::cout << "Reading APPN Marker\n";
-    uint length = (inFile.get() << 8) + inFile.get();
+    uint length = bitReader.readWord();
     if (length < 2) {
         std::cout << "Error - APPN invalid\n";
         image->valid = false;
@@ -354,14 +466,14 @@ void readAPPN(std::ifstream& inFile, JPGImage* const image) {
     }
 
     for (uint i = 0; i < length - 2; ++i) {
-        inFile.get();
+        bitReader.readByte();
     }
 }
 
 // comments simply get skipped based on length
-void readComment(std::ifstream& inFile, JPGImage* const image) {
+void readComment(BitReader& bitReader, JPGImage* const image) {
     std::cout << "Reading COM Marker\n";
-    uint length = (inFile.get() << 8) + inFile.get();
+    uint length = bitReader.readWord();
     if (length < 2) {
         std::cout << "Error - COM invalid\n";
         image->valid = false;
@@ -369,25 +481,106 @@ void readComment(std::ifstream& inFile, JPGImage* const image) {
     }
 
     for (uint i = 0; i < length - 2; ++i) {
-        inFile.get();
+        bitReader.readByte();
     }
 }
 
-void readFrameHeader(std::ifstream& inFile, JPGImage* const image) {
+// print all info extracted from the JPG file
+void printFrameInfo(const JPGImage* const image) {
+    if (image == nullptr) return;
+    std::cout << "SOF=============\n";
+    std::cout << "Frame Type: 0x" << std::hex << (uint)image->frameType << std::dec << '\n';
+    std::cout << "Height: " << image->height << '\n';
+    std::cout << "Width: " << image->width << '\n';
+    std::cout << "Color Components:\n";
+    for (uint i = 0; i < image->numComponents; ++i) {
+        if (image->colorComponents[i].usedInFrame) {
+            std::cout << "Component ID: " << (i + 1) << '\n';
+            std::cout << "Horizontal Sampling Factor: " << (uint)image->colorComponents[i].horizontalSamplingFactor << '\n';
+            std::cout << "Vertical Sampling Factor: " << (uint)image->colorComponents[i].verticalSamplingFactor << '\n';
+            std::cout << "Quantization Table ID: " << (uint)image->colorComponents[i].quantizationTableID << '\n';
+        }
+    }
+    std::cout << "DQT=============\n";
+    for (uint i = 0; i < 4; ++i) {
+        if (image->quantizationTables[i].set) {
+            std::cout << "Table ID: " << i << '\n';
+            std::cout << "Table Data:";
+            for (uint j = 0; j < 64; ++j) {
+                if (j % 8 == 0) {
+                    std::cout << '\n';
+                }
+                std::cout << image->quantizationTables[i].table[j] << ' ';
+            }
+            std::cout << '\n';
+        }
+    }
+}
+
+// print info for the next scan
+void printScanInfo(const JPGImage* const image) {
+    if (image == nullptr) return;
+    std::cout << "SOS=============\n";
+    std::cout << "Start of Selection: " << (uint)image->startOfSelection << '\n';
+    std::cout << "End of Selection: " << (uint)image->endOfSelection << '\n';
+    std::cout << "Successive Approximation High: " << (uint)image->successiveApproximationHigh << '\n';
+    std::cout << "Successive Approximation Low: " << (uint)image->successiveApproximationLow << '\n';
+    std::cout << "Color Components:\n";
+    for (uint i = 0; i < image->numComponents; ++i) {
+        if (image->colorComponents[i].usedInScan) {
+            std::cout << "Component ID: " << (i + 1) << '\n';
+            std::cout << "Huffman DC Table ID: " << (uint)image->colorComponents[i].huffmanDCTableID << '\n';
+            std::cout << "Huffman AC Table ID: " << (uint)image->colorComponents[i].huffmanACTableID << '\n';
+        }
+    }
+    std::cout << "DHT=============\n";
+    std::cout << "DC Tables:\n";
+    for (uint i = 0; i < 4; ++i) {
+        if (image->huffmanDCTables[i].set) {
+            std::cout << "Table ID: " << i << '\n';
+            std::cout << "Symbols:\n";
+            for (uint j = 0; j < 16; ++j) {
+                std::cout << (j + 1) << ": ";
+                for (uint k = image->huffmanDCTables[i].offsets[j]; k < image->huffmanDCTables[i].offsets[j + 1]; ++k) {
+                    std::cout << std::hex << (uint)image->huffmanDCTables[i].symbols[k] << std::dec << ' ';
+                }
+                std::cout << '\n';
+            }
+        }
+    }
+    std::cout << "AC Tables:\n";
+    for (uint i = 0; i < 4; ++i) {
+        if (image->huffmanACTables[i].set) {
+            std::cout << "Table ID: " << i << '\n';
+            std::cout << "Symbols:\n";
+            for (uint j = 0; j < 16; ++j) {
+                std::cout << (j + 1) << ": ";
+                for (uint k = image->huffmanACTables[i].offsets[j]; k < image->huffmanACTables[i].offsets[j + 1]; ++k) {
+                    std::cout << std::hex << (uint)image->huffmanACTables[i].symbols[k] << std::dec << ' ';
+                }
+                std::cout << '\n';
+            }
+        }
+    }
+    std::cout << "DRI=============\n";
+    std::cout << "Restart Interval: " << image->restartInterval << '\n';
+}
+
+void readFrameHeader(BitReader& bitReader, JPGImage* const image) {
     // first two bytes must be 0xFF, SOI
-    byte last = inFile.get();
-    byte current = inFile.get();
+    byte last = bitReader.readByte();
+    byte current = bitReader.readByte();
     if (last != 0xFF || current != SOI) {
         std::cout << "Error - SOI invalid\n";
         image->valid = false;
         return;
     }
-    last = inFile.get();
-    current = inFile.get();
+    last = bitReader.readByte();
+    current = bitReader.readByte();
 
     // read markers until first scan
     while (image->valid) {
-        if (!inFile) {
+        if (!bitReader.hasBits()) {
             std::cout << "Error - File ended prematurely\n";
             image->valid = false;
             return;
@@ -400,41 +593,44 @@ void readFrameHeader(std::ifstream& inFile, JPGImage* const image) {
 
         if (current == SOF0) {
             image->frameType = SOF0;
-            readStartOfFrame(inFile, image);
+            readStartOfFrame(bitReader, image);
+        }
+        else if (current == SOF2) {
+            image->frameType = SOF2;
+            readStartOfFrame(bitReader, image);
         }
         else if (current == DQT) {
-            readQuantizationTable(inFile, image);
+            readQuantizationTable(bitReader, image);
         }
         else if (current == DHT) {
-            readHuffmanTable(inFile, image);
+            readHuffmanTable(bitReader, image);
         }
         else if (current == SOS) {
-            readStartOfScan(inFile, image);
-            // break from while loop after SOS
+            // break from while loop at SOS
             break;
         }
         else if (current == DRI) {
-            readRestartInterval(inFile, image);
+            readRestartInterval(bitReader, image);
         }
         else if (current >= APP0 && current <= APP15) {
-            readAPPN(inFile, image);
+            readAPPN(bitReader, image);
         }
         else if (current == COM) {
-            readComment(inFile, image);
+            readComment(bitReader, image);
         }
         // unused markers that can be skipped
         else if ((current >= JPG0 && current <= JPG13) ||
                 current == DNL ||
                 current == DHP ||
                 current == EXP) {
-            readComment(inFile, image);
+            readComment(bitReader, image);
         }
         else if (current == TEM) {
             // TEM has no size
         }
         // any number of 0xFF in a row is allowed and should be ignored
         else if (current == 0xFF) {
-            current = inFile.get();
+            current = bitReader.readByte();
             continue;
         }
 
@@ -468,62 +664,72 @@ void readFrameHeader(std::ifstream& inFile, JPGImage* const image) {
             image->valid = false;
             return;
         }
-        last = inFile.get();
-        current = inFile.get();
+        last = bitReader.readByte();
+        current = bitReader.readByte();
     }
 }
 
-void readScans(std::ifstream& inFile, JPGImage* const image) {
-    byte last;
-    byte current = inFile.get();
-    // read compressed image data
-    while (true) {
-        if (!inFile) {
+void decodeHuffmanData(BitReader& bitReader, JPGImage* const image);
+
+void readScans(BitReader& bitReader, JPGImage* const image) {
+    // decode first scan
+    readStartOfScan(bitReader, image);
+    printScanInfo(image);
+    decodeHuffmanData(bitReader, image);
+
+    byte last = bitReader.readByte();
+    byte current = bitReader.readByte();
+
+    // decode additional scans, if any
+    while (image->valid) {
+        if (!bitReader.hasBits()) {
             std::cout << "Error - File ended prematurely\n";
             image->valid = false;
             return;
         }
 
-        last = current;
-        current = inFile.get();
-        // if marker is found
-        if (last == 0xFF) {
-            // end of image
-            if (current == EOI) {
-                break;
-            }
-            // 0xFF00 means put a literal 0xFF in image data and ignore 0x00
-            else if (current == 0x00) {
-                image->huffmanData.push_back(last);
-                // overwrite 0x00 with next byte
-                current = inFile.get();
-            }
-            // restart marker
-            else if (current >= RST0 && current <= RST7) {
-                // overwrite marker with next byte
-                current = inFile.get();
-            }
-            // ignore multiple 0xFF's in a row
-            else if (current == 0xFF) {
-                // do nothing
-                continue;
-            }
-            else {
-                std::cout << "Error - Invalid marker during scan: 0x" << std::hex << (uint)current << std::dec << '\n';
-                image->valid = false;
-                return;
-            }
+        // end of image
+        if (current == EOI) {
+            break;
+        }
+        // huffman tables (progressive only)
+        else if (current == DHT && image->frameType == SOF2) {
+            readHuffmanTable(bitReader, image);
+        }
+        // additional scans (progressive only)
+        else if (current == SOS && image->frameType == SOF2) {
+            readStartOfScan(bitReader, image);
+            printScanInfo(image);
+            decodeHuffmanData(bitReader, image);
+        }
+        // new restart interval (progressive only)
+        else if (current == DRI && image->frameType == SOF2) {
+            readRestartInterval(bitReader, image);
+        }
+        // restart marker, perhaps from the very end of previous scan
+        else if (current >= RST0 && current <= RST7) {
+            // RSTN has no size
+        }
+        // ignore multiple 0xFF's in a row
+        else if (current == 0xFF) {
+            current = bitReader.readByte();
+            continue;
         }
         else {
-            image->huffmanData.push_back(last);
+            std::cout << "Error - Invalid marker: 0x" << std::hex << (uint)current << std::dec << '\n';
+            image->valid = false;
+            return;
         }
+        last = bitReader.readByte();
+        current = bitReader.readByte();
     }
 }
 
 JPGImage* readJPG(const std::string& filename) {
     // open file
-    std::ifstream inFile = std::ifstream(filename, std::ios::in | std::ios::binary);
-    if (!inFile.is_open()) {
+    std::cout << "Reading " << filename << "...\n";
+    BitReader bitReader(filename);
+    if (!bitReader.hasBits()) {
         std::cout << "Error - Error opening input file\n";
         return nullptr;
     }
@@ -531,14 +737,13 @@ JPGImage* readJPG(const std::string& filename) {
     JPGImage* image = new (std::nothrow) JPGImage;
     if (image == nullptr) {
         std::cout << "Error - Memory error\n";
-        inFile.close();
         return nullptr;
     }
 
-    readFrameHeader(inFile, image);
+    readFrameHeader(bitReader, image);
+    printFrameInfo(image);
 
     if (!image->valid) {
-        inFile.close();
         return image;
     }
 
@@ -546,143 +751,13 @@ JPGImage* readJPG(const std::string& filename) {
     if (image->blocks == nullptr) {
         std::cout << "Error - Memory error\n";
         image->valid = false;
-        inFile.close();
         return image;
     }
 
-    readScans(inFile, image);
+    readScans(bitReader, image);
 
-    inFile.close();
     return image;
 }
-
-// print all info extracted from the JPG file
-void printHeader(const JPGImage* const image) {
-    if (image == nullptr) return;
-    std::cout << "DQT=============\n";
-    for (uint i = 0; i < 4; ++i) {
-        if (image->quantizationTables[i].set) {
-            std::cout << "Table ID: " << i << '\n';
-            std::cout << "Table Data:";
-            for (uint j = 0; j < 64; ++j) {
-                if (j % 8 == 0) {
-                    std::cout << '\n';
-                }
-                std::cout << image->quantizationTables[i].table[j] << ' ';
-            }
-            std::cout << '\n';
-        }
-    }
-    std::cout << "SOF=============\n";
-    std::cout << "Frame Type: 0x" << std::hex << (uint)image->frameType << std::dec << '\n';
-    std::cout << "Height: " << image->height << '\n';
-    std::cout << "Width: " << image->width << '\n';
-    std::cout << "Color Components:\n";
-    for (uint i = 0; i < image->numComponents; ++i) {
-        std::cout << "Component ID: " << (i + 1) << '\n';
-        std::cout << "Horizontal Sampling Factor: " << (uint)image->colorComponents[i].horizontalSamplingFactor << '\n';
-        std::cout << "Vertical Sampling Factor: " << (uint)image->colorComponents[i].verticalSamplingFactor << '\n';
-        std::cout << "Quantization Table ID: " << (uint)image->colorComponents[i].quantizationTableID << '\n';
-    }
-    std::cout << "DHT=============\n";
-    std::cout << "DC Tables:\n";
-    for (uint i = 0; i < 4; ++i) {
-        if (image->huffmanDCTables[i].set) {
-            std::cout << "Table ID: " << i << '\n';
-            std::cout << "Symbols:\n";
-            for (uint j = 0; j < 16; ++j) {
-                std::cout << (j + 1) << ": ";
-                for (uint k = image->huffmanDCTables[i].offsets[j]; k < image->huffmanDCTables[i].offsets[j + 1]; ++k) {
-                    std::cout << std::hex << (uint)image->huffmanDCTables[i].symbols[k] << std::dec << ' ';
-                }
-                std::cout << '\n';
-            }
-        }
-    }
-    std::cout << "AC Tables:\n";
-    for (uint i = 0; i < 4; ++i) {
-        if (image->huffmanACTables[i].set) {
-            std::cout << "Table ID: " << i << '\n';
-            std::cout << "Symbols:\n";
-            for (uint j = 0; j < 16; ++j) {
-                std::cout << (j + 1) << ": ";
-                for (uint k = image->huffmanACTables[i].offsets[j]; k < image->huffmanACTables[i].offsets[j + 1]; ++k) {
-                    std::cout << std::hex << (uint)image->huffmanACTables[i].symbols[k] << std::dec << ' ';
-                }
-                std::cout << '\n';
-            }
-        }
-    }
-    std::cout << "SOS=============\n";
-    std::cout << "Start of Selection: " << (uint)image->startOfSelection << '\n';
-    std::cout << "End of Selection: " << (uint)image->endOfSelection << '\n';
-    std::cout << "Successive Approximation High: " << (uint)image->successiveApproximationHigh << '\n';
-    std::cout << "Successive Approximation Low: " << (uint)image->successiveApproximationLow << '\n';
-    std::cout << "Color Components:\n";
-    for (uint i = 0; i < image->numComponents; ++i) {
-        std::cout << "Component ID: " << (i + 1) << '\n';
-        std::cout << "Huffman DC Table ID: " << (uint)image->colorComponents[i].huffmanDCTableID << '\n';
-        std::cout << "Huffman AC Table ID: " << (uint)image->colorComponents[i].huffmanACTableID << '\n';
-    }
-    std::cout << "Length of Huffman Data: " << image->huffmanData.size() << '\n';
-    std::cout << "DRI=============\n";
-    std::cout << "Restart Interval: " << image->restartInterval << '\n';
-}
-
-// helper class to read bits from a byte vector
-class BitReader {
-private:
-    uint nextByte = 0;
-    uint nextBit = 0;
-    const std::vector<byte>& data;
-
-public:
-    BitReader(const std::vector<byte>& d) :
-    data(d)
-    {}
-
-    // read one bit (0 or 1) or return -1 if all bits have already been read
-    int readBit() {
-        if (nextByte >= data.size()) {
-            return -1;
-        }
-        int bit = (data[nextByte] >> (7 - nextBit)) & 1;
-        nextBit += 1;
-        if (nextBit == 8) {
-            nextBit = 0;
-            nextByte += 1;
-        }
-        return bit;
-    }
-
-    // read a variable number of bits
-    // first read bit is most significant bit
-    // return -1 if at any point all bits have already been read
-    int readBits(const uint length) {
-        int bits = 0;
-        for (uint i = 0; i < length; ++i) {
-            int bit = readBit();
-            if (bit == -1) {
-                bits = -1;
-                break;
-            }
-            bits = (bits << 1) | bit;
-        }
-        return bits;
-    }
-
-    // if there are bits remaining,
-    //   advance to the 0th bit of the next byte
-    void align() {
-        if (nextByte >= data.size()) {
-            return;
-        }
-        if (nextBit != 0) {
-            nextBit = 0;
-            nextByte += 1;
-        }
-    }
-};
 
 // return the symbol from the Huffman table that corresponds to
 //   the next Huffman code read from the BitReader
@@ -705,81 +780,303 @@ byte getNextSymbol(BitReader& bitReader, const HuffmanTable& hTable) {
 
 // fill the coefficients of a block component based on Huffman codes
 //   read from the BitReader
-bool decodeBlockComponent(BitReader& bitReader, int* const component, int& previousDC,
-                        const HuffmanTable& dcTable,
-                        const HuffmanTable& acTable) {
-    // get the DC value for this block component
-    byte length = getNextSymbol(bitReader, dcTable);
-    if (length == (byte)-1) {
-        std::cout << "Error - Invalid DC value\n";
-        return false;
-    }
-    if (length > 11) {
-        std::cout << "Error - DC coefficient length greater than 11\n";
-        return false;
-    }
-
-    int coeff = bitReader.readBits(length);
-    if (coeff == -1) {
-        std::cout << "Error - Invalid DC value\n";
-        return false;
-    }
-    if (length != 0 && coeff < (1 << (length - 1))) {
-        coeff -= (1 << length) - 1;
-    }
-    component[0] = coeff + previousDC;
-    previousDC = component[0];
-
-    // get the AC values for this block component
-    for (uint i = 1; i < 64; ++i) {
-        byte symbol = getNextSymbol(bitReader, acTable);
-        if (symbol == (byte)-1) {
-            std::cout << "Error - Invalid AC value\n";
+bool decodeBlockComponent(
+    const JPGImage* const image,
+    BitReader& bitReader,
+    int* const component,
+    int& previousDC,
+    uint& skips,
+    const HuffmanTable& dcTable,
+    const HuffmanTable& acTable
+) {
+    if (image->frameType == SOF0) {
+        // get the DC value for this block component
+        byte length = getNextSymbol(bitReader, dcTable);
+        if (length == (byte)-1) {
+            std::cout << "Error - Invalid DC value\n";
+            return false;
+        }
+        if (length > 11) {
+            std::cout << "Error - DC coefficient length greater than 11\n";
             return false;
         }
 
-        // symbol 0x00 means fill remainder of component with 0
-        if (symbol == 0x00) {
+        int coeff = bitReader.readBits(length);
+        if (coeff == -1) {
+            std::cout << "Error - Invalid DC value\n";
+            return false;
+        }
+        if (length != 0 && coeff < (1 << (length - 1))) {
+            coeff -= (1 << length) - 1;
+        }
+        component[0] = coeff + previousDC;
+        previousDC = component[0];
+
+        // get the AC values for this block component
+        for (uint i = 1; i < 64; ++i) {
+            byte symbol = getNextSymbol(bitReader, acTable);
+            if (symbol == (byte)-1) {
+                std::cout << "Error - Invalid AC value\n";
+                return false;
+            }
+
+            // symbol 0x00 means fill remainder of component with 0
+            if (symbol == 0x00) {
+                return true;
+            }
+
+            // otherwise, read next component coefficient
+            byte numZeroes = symbol >> 4;
+            byte coeffLength = symbol & 0x0F;
+            coeff = 0;
+
+            if (i + numZeroes >= 64) {
+                std::cout << "Error - Zero run-length exceeded block component\n";
+                return false;
+            }
+            i += numZeroes;
+
+            if (coeffLength > 10) {
+                std::cout << "Error - AC coefficient length greater than 10\n";
+                return false;
+            }
+            coeff = bitReader.readBits(coeffLength);
+            if (coeff == -1) {
+                std::cout << "Error - Invalid AC value\n";
+                return false;
+            }
+            if (coeff < (1 << (coeffLength - 1))) {
+                coeff -= (1 << coeffLength) - 1;
+            }
+            component[zigZagMap[i]] = coeff;
+        }
+    }
+    else { // image->frameType == SOF2
+        if (image->startOfSelection == 0 && image->successiveApproximationHigh == 0) {
+            // DC first visit
+            byte length = getNextSymbol(bitReader, dcTable);
+            if (length == (byte)-1) {
+                std::cout << "Error - Invalid DC value\n";
+                return false;
+            }
+            if (length > 11) {
+                std::cout << "Error - DC coefficient length greater than 11\n";
+                return false;
+            }
+
+            int coeff = bitReader.readBits(length);
+            if (coeff == -1) {
+                std::cout << "Error - Invalid DC value\n";
+                return false;
+            }
+            if (length != 0 && coeff < (1 << (length - 1))) {
+                coeff -= (1 << length) - 1;
+            }
+            coeff += previousDC;
+            previousDC = coeff;
+            component[0] = coeff << image->successiveApproximationLow;
             return true;
         }
+        else if (image->startOfSelection == 0 && image->successiveApproximationHigh != 0) {
+            // DC refinement
+            int bit = bitReader.readBit();
+            if (bit == -1) {
+                std::cout << "Error - Invalid DC value\n";
+                return false;
+            }
+            component[0] |= bit << image->successiveApproximationLow;
+            return true;
+        }
+        else if (image->startOfSelection != 0 && image->successiveApproximationHigh == 0) {
+            // AC first visit
+            if (skips > 0) {
+                skips -= 1;
+                return true;
+            }
+            for (uint i = image->startOfSelection; i <= image->endOfSelection; ++i) {
+                byte symbol = getNextSymbol(bitReader, acTable);
+                if (symbol == (byte)-1) {
+                    std::cout << "Error - Invalid AC value\n";
+                    return false;
+                }
 
-        // otherwise, read next component coefficient
-        byte numZeroes = symbol >> 4;
-        byte coeffLength = symbol & 0x0F;
-        coeff = 0;
+                byte numZeroes = symbol >> 4;
+                byte coeffLength = symbol & 0x0F;
 
-        if (i + numZeroes >= 64) {
-            std::cout << "Error - Zero run-length exceeded block component\n";
-            return false;
-        }
-        i += numZeroes;
+                if (coeffLength != 0) {
+                    if (i + numZeroes > image->endOfSelection) {
+                        std::cout << "Error - Zero run-length exceeded spectral selection\n";
+                        return false;
+                    }
+                    for (uint j = 0; j < numZeroes; ++j, ++i) {
+                        component[zigZagMap[i]] = 0;
+                    }
+                    if (coeffLength > 10) {
+                        std::cout << "Error - AC coefficient length greater than 10\n";
+                        return false;
+                    }
 
-        if (coeffLength > 10) {
-            std::cout << "Error - AC coefficient length greater than 10\n";
-            return false;
+                    int coeff = bitReader.readBits(coeffLength);
+                    if (coeff == -1) {
+                        std::cout << "Error - Invalid AC value\n";
+                        return false;
+                    }
+                    if (coeff < (1 << (coeffLength - 1))) {
+                        coeff -= (1 << coeffLength) - 1;
+                    }
+                    component[zigZagMap[i]] = coeff << image->successiveApproximationLow;
+                }
+                else {
+                    if (numZeroes == 15) {
+                        if (i + numZeroes > image->endOfSelection) {
+                            std::cout << "Error - Zero run-length exceeded spectral selection\n";
+                            return false;
+                        }
+                        for (uint j = 0; j < numZeroes; ++j, ++i) {
+                            component[zigZagMap[i]] = 0;
+                        }
+                    }
+                    else {
+                        skips = (1 << numZeroes) - 1;
+                        uint extraSkips = bitReader.readBits(numZeroes);
+                        if (extraSkips == (uint)-1) {
+                            std::cout << "Error - Invalid AC value\n";
+                            return false;
+                        }
+                        skips += extraSkips;
+                        break;
+                    }
+                }
+            }
+            return true;
         }
-        coeff = bitReader.readBits(coeffLength);
-        if (coeff == -1) {
-            std::cout << "Error - Invalid AC value\n";
-            return false;
+        else { // image->startOfSelection != 0 && image->successiveApproximationHigh != 0
+            // AC refinement
+            int large = 1 << image->successiveApproximationLow;
+            int small = (-1) << image->successiveApproximationLow;
+            int i = image->startOfSelection;
+            if (skips == 0) {
+                for (; i <= image->endOfSelection; ++i) {
+                    byte symbol = getNextSymbol(bitReader, acTable);
+                    if (symbol == (byte)-1) {
+                        std::cout << "Error - Invalid AC value\n";
+                        return false;
+                    }
+
+                    byte numZeroes = symbol >> 4;
+                    byte coeffLength = symbol & 0x0F;
+                    int coeff = 0;
+
+                    if (coeffLength != 0) {
+                        if (coeffLength != 1) {
+                            std::cout << "Error - Invalid AC value\n";
+                            return false;
+                        }
+                        switch(bitReader.readBit()) {
+                        case 1:
+                            coeff = large;
+                            break;
+                        case 0:
+                            coeff = small;
+                            break;
+                        default: // -1, data stream is empty
+                            std::cout << "Error - Invalid AC value\n";
+                            return false;
+                        }
+                    }
+                    else {
+                        if (numZeroes != 15) {
+                            skips = 1 << numZeroes;
+                            uint extraSkips = bitReader.readBits(numZeroes);
+                            if (extraSkips == (uint)-1) {
+                                std::cout << "Error - Invalid AC value\n";
+                                return false;
+                            }
+                            skips += extraSkips;
+                            break;
+                        }
+                    }
+
+                    do {
+                        if (component[zigZagMap[i]] != 0) {
+                            switch(bitReader.readBit()) {
+                            case 1:
+                                if ((component[zigZagMap[i]] & large) == 0) {
+                                    if (component[zigZagMap[i]] >= 0) {
+                                        component[zigZagMap[i]] += large;
+                                    }
+                                    else {
+                                        component[zigZagMap[i]] += small;
+                                    }
+                                }
+                                break;
+                            case 0:
+                                // do nothing
+                                break;
+                            default: // -1, data stream is empty
+                                std::cout << "Error - Invalid AC value\n";
+                                return false;
+                            }
+                        }
+                        else {
+                            if (numZeroes == 0) {
+                                break;
+                            }
+                            numZeroes -= 1;
+                        }
+
+                        i += 1;
+                    } while (i <= image->endOfSelection);
+
+                    if (i < 64) {
+                        component[zigZagMap[i]] = coeff;
+                    }
+                }
+            }
+
+            if (skips > 0) {
+                for (; i <= image->endOfSelection; ++i) {
+                    if (component[zigZagMap[i]] != 0) {
+                        switch(bitReader.readBit()) {
+                        case 1:
+                            if ((component[zigZagMap[i]] & large) == 0) {
+                                if (component[zigZagMap[i]] >= 0) {
+                                    component[zigZagMap[i]] += large;
+                                }
+                                else {
+                                    component[zigZagMap[i]] += small;
+                                }
+                            }
+                            break;
+                        case 0:
+                            // do nothing
+                            break;
+                        default: // -1, data stream is empty
+                            std::cout << "Error - Invalid AC value\n";
+                            return false;
+                        }
+                    }
+                }
+                skips -= 1;
+            }
+            return true;
         }
-        if (coeff < (1 << (coeffLength - 1))) {
-            coeff -= (1 << coeffLength) - 1;
-        }
-        component[zigZagMap[i]] = coeff;
     }
     return true;
 }
 
 // decode all the Huffman data and fill all MCUs
-void decodeHuffmanData(JPGImage* const image) {
-    BitReader bitReader(image->huffmanData);
-
+void decodeHuffmanData(BitReader& bitReader, JPGImage* const image) {
     int previousDCs[3] = { 0 };
-    uint restartInterval = image->restartInterval * image->horizontalSamplingFactor * image->verticalSamplingFactor;
+    uint skips = 0;
 
-    for (uint y = 0; y < image->blockHeight; y += image->verticalSamplingFactor) {
-        for (uint x = 0; x < image->blockWidth; x += image->horizontalSamplingFactor) {
+    const bool luminanceOnly = image->componentsInScan == 1 && image->colorComponents[0].usedInScan;
+    const uint yStep = luminanceOnly ? 1 : image->verticalSamplingFactor;
+    const uint xStep = luminanceOnly ? 1 : image->horizontalSamplingFactor;
+    const uint restartInterval = image->restartInterval * xStep * yStep;
+
+    for (uint y = 0; y < image->blockHeight; y += yStep) {
+        for (uint x = 0; x < image->blockWidth; x += xStep) {
             if (restartInterval != 0 && (y * image->blockWidthReal + x) % restartInterval == 0) {
                 previousDCs[0] = 0;
                 previousDCs[1] = 0;
@@ -789,15 +1086,21 @@ void decodeHuffmanData(JPGImage* const image) {
 
             for (uint i = 0; i < image->numComponents; ++i) {
                 const ColorComponent& component = image->colorComponents[i];
-                for (uint v = 0; v < component.verticalSamplingFactor; ++v) {
-                    for (uint h = 0; h < component.horizontalSamplingFactor; ++h) {
-                        if (!decodeBlockComponent(
-                                bitReader,
-                                image->blocks[(y + v) * image->blockWidthReal + (x + h)][i],
-                                previousDCs[i],
-                                image->huffmanDCTables[component.huffmanDCTableID],
-                                image->huffmanACTables[component.huffmanACTableID])) {
-                            return;
+                if (component.usedInScan) {
+                    const uint vMax = luminanceOnly ? 1 : component.verticalSamplingFactor;
+                    const uint hMax = luminanceOnly ? 1 : component.horizontalSamplingFactor;
+                    for (uint v = 0; v < vMax; ++v) {
+                        for (uint h = 0; h < hMax; ++h) {
+                            if (!decodeBlockComponent(
+                                    image,
+                                    bitReader,
+                                    image->blocks[(y + v) * image->blockWidthReal + (x + h)][i],
+                                    previousDCs[i],
+                                    skips,
+                                    image->huffmanDCTables[component.huffmanDCTableID],
+                                    image->huffmanACTables[component.huffmanACTableID])) {
+                                return;
+                            }
                         }
                     }
                 }
@@ -1027,23 +1330,24 @@ void YCbCrToRGB(const JPGImage* const image) {
 }
 
 // helper function to write a 4-byte integer in little-endian
-void putInt(std::ofstream& outFile, const uint v) {
-    outFile.put((v >>  0) & 0xFF);
-    outFile.put((v >>  8) & 0xFF);
-    outFile.put((v >> 16) & 0xFF);
-    outFile.put((v >> 24) & 0xFF);
+void putInt(byte*& bufferPos, const uint v) {
+    *bufferPos++ = v >>  0;
+    *bufferPos++ = v >>  8;
+    *bufferPos++ = v >> 16;
+    *bufferPos++ = v >> 24;
 }
 
 // helper function to write a 2-byte short integer in little-endian
-void putShort(std::ofstream& outFile, const uint v) {
-    outFile.put((v >>  0) & 0xFF);
-    outFile.put((v >>  8) & 0xFF);
+void putShort(byte*& bufferPos, const uint v) {
+    *bufferPos++ = v >> 0;
+    *bufferPos++ = v >> 8;
 }
 
 // write all the pixels in the MCUs to a BMP file
 void writeBMP(const JPGImage* const image, const std::string& filename) {
     // open file
-    std::ofstream outFile = std::ofstream(filename, std::ios::out | std::ios::binary);
+    std::cout << "Writing " << filename << "...\n";
+    std::ofstream outFile(filename, std::ios::out | std::ios::binary);
     if (!outFile.is_open()) {
         std::cout << "Error - Error opening output file\n";
         return;
@@ -1052,16 +1356,24 @@ void writeBMP(const JPGImage* const image, const std::string& filename) {
     const uint paddingSize = image->width % 4;
     const uint size = 14 + 12 + image->height * image->width * 3 + paddingSize * image->height;
 
-    outFile.put('B');
-    outFile.put('M');
-    putInt(outFile, size);
-    putInt(outFile, 0);
-    putInt(outFile, 0x1A);
-    putInt(outFile, 12);
-    putShort(outFile, image->width);
-    putShort(outFile, image->height);
-    putShort(outFile, 1);
-    putShort(outFile, 24);
+    byte* buffer = new (std::nothrow) byte[size];
+    if (buffer == nullptr) {
+        std::cout << "Error - Memory error\n";
+        outFile.close();
+        return;
+    }
+    byte* bufferPos = buffer;
+
+    *bufferPos++ = 'B';
+    *bufferPos++ = 'M';
+    putInt(bufferPos, size);
+    putInt(bufferPos, 0);
+    putInt(bufferPos, 0x1A);
+    putInt(bufferPos, 12);
+    putShort(bufferPos, image->width);
+    putShort(bufferPos, image->height);
+    putShort(bufferPos, 1);
+    putShort(bufferPos, 24);
 
     for (uint y = image->height - 1; y < image->height; --y) {
         const uint blockRow = y / 8;
@@ -1071,16 +1383,18 @@ void writeBMP(const JPGImage* const image, const std::string& filename) {
             const uint pixelColumn = x % 8;
             const uint blockIndex = blockRow * image->blockWidthReal + blockColumn;
             const uint pixelIndex = pixelRow * 8 + pixelColumn;
-            outFile.put(image->blocks[blockIndex].b[pixelIndex]);
-            outFile.put(image->blocks[blockIndex].g[pixelIndex]);
-            outFile.put(image->blocks[blockIndex].r[pixelIndex]);
+            *bufferPos++ = image->blocks[blockIndex].b[pixelIndex];
+            *bufferPos++ = image->blocks[blockIndex].g[pixelIndex];
+            *bufferPos++ = image->blocks[blockIndex].r[pixelIndex];
         }
         for (uint i = 0; i < paddingSize; ++i) {
-            outFile.put(0);
+            *bufferPos++ = 0;
         }
     }
 
+    outFile.write((char*)buffer, size);
     outFile.close();
+    delete[] buffer;
 }
 
 int main(int argc, char** argv) {
@@ -1108,11 +1422,6 @@ int main(int argc, char** argv) {
             delete image;
             continue;
         }
-
-        printHeader(image);
-
-        // decode Huffman data
-        decodeHuffmanData(image);
 
         // dequantize DCT coefficients
         dequantize(image);

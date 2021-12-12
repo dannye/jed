@@ -1,7 +1,6 @@
 #ifndef JPG_H
 #define JPG_H
 
-#include <vector>
 #include <cmath>
 
 typedef unsigned char byte;
@@ -162,7 +161,6 @@ struct JPGImage {
 
     uint restartInterval = 0;
 
-    std::vector<byte> huffmanData;
     Block* blocks = nullptr;
 
     bool valid = true;
