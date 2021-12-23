@@ -278,7 +278,7 @@ void readHuffmanTable(BitReader& bitReader, JPGImage* const image) {
             allSymbols += bitReader.readByte();
             hTable.offsets[i] = allSymbols;
         }
-        if (allSymbols > 162) {
+        if (allSymbols > 176) {
             std::cout << "Error - Too many symbols in Huffman table: " << allSymbols << '\n';
             image->valid = false;
             return;
@@ -687,6 +687,11 @@ void readScans(BitReader& bitReader, JPGImage* const image) {
             image->valid = false;
             return;
         }
+        if (last != 0xFF) {
+            std::cout << "Error - Expected a marker\n";
+            image->valid = false;
+            return;
+        }
 
         // end of image
         if (current == EOI) {
@@ -850,6 +855,7 @@ bool decodeBlockComponent(
             }
             component[zigZagMap[i]] = coeff;
         }
+        return true;
     }
     else { // image->frameType == SOF2
         if (image->startOfSelection == 0 && image->successiveApproximationHigh == 0) {
@@ -952,8 +958,8 @@ bool decodeBlockComponent(
         }
         else { // image->startOfSelection != 0 && image->successiveApproximationHigh != 0
             // AC refinement
-            int large = 1 << image->successiveApproximationLow;
-            int small = (-1) << image->successiveApproximationLow;
+            int positive = 1 << image->successiveApproximationLow;
+            int negative = ((unsigned)-1) << image->successiveApproximationLow;
             int i = image->startOfSelection;
             if (skips == 0) {
                 for (; i <= image->endOfSelection; ++i) {
@@ -972,12 +978,12 @@ bool decodeBlockComponent(
                             std::cout << "Error - Invalid AC value\n";
                             return false;
                         }
-                        switch(bitReader.readBit()) {
+                        switch (bitReader.readBit()) {
                         case 1:
-                            coeff = large;
+                            coeff = positive;
                             break;
                         case 0:
-                            coeff = small;
+                            coeff = negative;
                             break;
                         default: // -1, data stream is empty
                             std::cout << "Error - Invalid AC value\n";
@@ -999,14 +1005,14 @@ bool decodeBlockComponent(
 
                     do {
                         if (component[zigZagMap[i]] != 0) {
-                            switch(bitReader.readBit()) {
+                            switch (bitReader.readBit()) {
                             case 1:
-                                if ((component[zigZagMap[i]] & large) == 0) {
+                                if ((component[zigZagMap[i]] & positive) == 0) {
                                     if (component[zigZagMap[i]] >= 0) {
-                                        component[zigZagMap[i]] += large;
+                                        component[zigZagMap[i]] += positive;
                                     }
                                     else {
-                                        component[zigZagMap[i]] += small;
+                                        component[zigZagMap[i]] += negative;
                                     }
                                 }
                                 break;
@@ -1028,7 +1034,7 @@ bool decodeBlockComponent(
                         i += 1;
                     } while (i <= image->endOfSelection);
 
-                    if (i < 64) {
+                    if (coeff != 0 && i <= image->endOfSelection) {
                         component[zigZagMap[i]] = coeff;
                     }
                 }
@@ -1037,14 +1043,14 @@ bool decodeBlockComponent(
             if (skips > 0) {
                 for (; i <= image->endOfSelection; ++i) {
                     if (component[zigZagMap[i]] != 0) {
-                        switch(bitReader.readBit()) {
+                        switch (bitReader.readBit()) {
                         case 1:
-                            if ((component[zigZagMap[i]] & large) == 0) {
+                            if ((component[zigZagMap[i]] & positive) == 0) {
                                 if (component[zigZagMap[i]] >= 0) {
-                                    component[zigZagMap[i]] += large;
+                                    component[zigZagMap[i]] += positive;
                                 }
                                 else {
-                                    component[zigZagMap[i]] += small;
+                                    component[zigZagMap[i]] += negative;
                                 }
                             }
                             break;
@@ -1062,7 +1068,6 @@ bool decodeBlockComponent(
             return true;
         }
     }
-    return true;
 }
 
 // decode all the Huffman data and fill all MCUs
@@ -1081,6 +1086,7 @@ void decodeHuffmanData(BitReader& bitReader, JPGImage* const image) {
                 previousDCs[0] = 0;
                 previousDCs[1] = 0;
                 previousDCs[2] = 0;
+                skips = 0;
                 bitReader.align();
             }
 

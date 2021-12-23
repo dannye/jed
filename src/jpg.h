@@ -99,8 +99,8 @@ struct QuantizationTable {
 
 struct HuffmanTable {
     byte offsets[17] = { 0 };
-    byte symbols[162] = { 0 };
-    uint codes[162] = { 0 };
+    byte symbols[176] = { 0 };
+    uint codes[176] = { 0 };
     bool set = false;
 };
 
