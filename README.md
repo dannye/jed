@@ -2,9 +2,9 @@
 
 A C++ JPG Encoder/Decoder
 
-jed currently decodes all standard JPGs and outputs them in BMP format.
+jed encodes uncompressed BMPs and outputs them as baseline JPGs.
 
-Encoder is WIP.
+jed decodes all standard JPGs (baseline, progressive, subsampled) and outputs them in BMP format.
 
 This project was created for the video series, [**Everything You Need to Know About JPEG**][yt].
 
