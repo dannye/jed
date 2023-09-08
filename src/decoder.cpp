@@ -1142,6 +1142,9 @@ void dequantize(const JPGImage* const image) {
 // perform 1-D IDCT on all columns and rows of a block component
 //   resulting in 2-D IDCT
 void inverseDCTBlockComponent(int* const component) {
+
+    float intermediate[64];
+
     for (uint i = 0; i < 8; ++i) {
         const float g0 = component[0 * 8 + i] * s0;
         const float g1 = component[4 * 8 + i] * s4;
@@ -1200,24 +1203,24 @@ void inverseDCTBlockComponent(int* const component) {
         const float b6 = c6 - c7;
         const float b7 = c7;
 
-        component[0 * 8 + i] = b0 + b7;
-        component[1 * 8 + i] = b1 + b6;
-        component[2 * 8 + i] = b2 + b5;
-        component[3 * 8 + i] = b3 + b4;
-        component[4 * 8 + i] = b3 - b4;
-        component[5 * 8 + i] = b2 - b5;
-        component[6 * 8 + i] = b1 - b6;
-        component[7 * 8 + i] = b0 - b7;
+        intermediate[0 * 8 + i] = b0 + b7;
+        intermediate[1 * 8 + i] = b1 + b6;
+        intermediate[2 * 8 + i] = b2 + b5;
+        intermediate[3 * 8 + i] = b3 + b4;
+        intermediate[4 * 8 + i] = b3 - b4;
+        intermediate[5 * 8 + i] = b2 - b5;
+        intermediate[6 * 8 + i] = b1 - b6;
+        intermediate[7 * 8 + i] = b0 - b7;
     }
     for (uint i = 0; i < 8; ++i) {
-        const float g0 = component[i * 8 + 0] * s0;
-        const float g1 = component[i * 8 + 4] * s4;
-        const float g2 = component[i * 8 + 2] * s2;
-        const float g3 = component[i * 8 + 6] * s6;
-        const float g4 = component[i * 8 + 5] * s5;
-        const float g5 = component[i * 8 + 1] * s1;
-        const float g6 = component[i * 8 + 7] * s7;
-        const float g7 = component[i * 8 + 3] * s3;
+        const float g0 = intermediate[i * 8 + 0] * s0;
+        const float g1 = intermediate[i * 8 + 4] * s4;
+        const float g2 = intermediate[i * 8 + 2] * s2;
+        const float g3 = intermediate[i * 8 + 6] * s6;
+        const float g4 = intermediate[i * 8 + 5] * s5;
+        const float g5 = intermediate[i * 8 + 1] * s1;
+        const float g6 = intermediate[i * 8 + 7] * s7;
+        const float g7 = intermediate[i * 8 + 3] * s3;
 
         const float f0 = g0;
         const float f1 = g1;
