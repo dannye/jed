@@ -1267,14 +1267,14 @@ void inverseDCTBlockComponent(int* const component) {
         const float b6 = c6 - c7;
         const float b7 = c7;
 
-        component[i * 8 + 0] = b0 + b7;
-        component[i * 8 + 1] = b1 + b6;
-        component[i * 8 + 2] = b2 + b5;
-        component[i * 8 + 3] = b3 + b4;
-        component[i * 8 + 4] = b3 - b4;
-        component[i * 8 + 5] = b2 - b5;
-        component[i * 8 + 6] = b1 - b6;
-        component[i * 8 + 7] = b0 - b7;
+        component[i * 8 + 0] = b0 + b7 + 0.5f;
+        component[i * 8 + 1] = b1 + b6 + 0.5f;
+        component[i * 8 + 2] = b2 + b5 + 0.5f;
+        component[i * 8 + 3] = b3 + b4 + 0.5f;
+        component[i * 8 + 4] = b3 - b4 + 0.5f;
+        component[i * 8 + 5] = b2 - b5 + 0.5f;
+        component[i * 8 + 6] = b1 - b6 + 0.5f;
+        component[i * 8 + 7] = b0 - b7 + 0.5f;
     }
 }
 
