@@ -487,7 +487,7 @@ void readComment(BitReader& bitReader, JPGImage* const image) {
 
 // print all info extracted from the JPG file
 void printFrameInfo(const JPGImage* const image) {
-    if (image == nullptr) return;
+    if (!image->valid || image == nullptr) return;
     std::cout << "SOF=============\n";
     std::cout << "Frame Type: 0x" << std::hex << (uint)image->frameType << std::dec << '\n';
     std::cout << "Height: " << image->height << '\n';
@@ -1072,6 +1072,8 @@ bool decodeBlockComponent(
 
 // decode all the Huffman data and fill all MCUs
 void decodeHuffmanData(BitReader& bitReader, JPGImage* const image) {
+
+    if(!image->valid)   return;
     int previousDCs[3] = { 0 };
     uint skips = 0;
 

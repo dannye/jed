@@ -2,3 +2,4 @@ bin/
 *.jpg
 *.jpeg
 *.bmp
+.vscode/
