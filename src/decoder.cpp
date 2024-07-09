@@ -43,10 +43,16 @@ public:
             }
             nextByte = inFile.get();
             while (nextByte == 0xFF) {
+                if (!hasBits()) {
+                    return -1;
+                }
                 byte marker = inFile.peek();
                 // ignore multiple 0xFF's in a row
                 while (marker == 0xFF) {
                     inFile.get();
+                    if (!hasBits()) {
+                        return -1;
+                    }
                     marker = inFile.peek();
                 }
                 // literal 0xFF's are encoded in the bitstream as 0xFF00
@@ -674,6 +680,9 @@ void decodeHuffmanData(BitReader& bitReader, JPGImage* const image);
 void readScans(BitReader& bitReader, JPGImage* const image) {
     // decode first scan
     readStartOfScan(bitReader, image);
+    if (!image->valid) {
+        return;
+    }
     printScanInfo(image);
     decodeHuffmanData(bitReader, image);
 
@@ -704,6 +713,9 @@ void readScans(BitReader& bitReader, JPGImage* const image) {
         // additional scans (progressive only)
         else if (current == SOS && image->frameType == SOF2) {
             readStartOfScan(bitReader, image);
+            if (!image->valid) {
+                return;
+            }
             printScanInfo(image);
             decodeHuffmanData(bitReader, image);
         }
@@ -746,11 +758,12 @@ JPGImage* readJPG(const std::string& filename) {
     }
 
     readFrameHeader(bitReader, image);
-    printFrameInfo(image);
 
     if (!image->valid) {
         return image;
     }
+
+    printFrameInfo(image);
 
     image->blocks = new (std::nothrow) Block[image->blockHeightReal * image->blockWidthReal];
     if (image->blocks == nullptr) {
